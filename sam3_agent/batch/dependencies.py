@@ -23,6 +23,7 @@ def get_llm_config(config: LLMConfig) -> dict[str, Any]:
         "base_url": config.base_url,
         "api_key": config.api_key,
         "max_tokens": config.max_tokens,
+        "extra_body": config.extra_body,
     }
 
 
@@ -54,6 +55,7 @@ def build_runner(config: RunConfig, verbose: bool = False):
         model=llm_config["model"],
         api_key=llm_config["api_key"],
         max_tokens=llm_config["max_tokens"],
+        extra_body=llm_config["extra_body"],
         verbose=verbose,
     )
     return llm_config, request, sam_tool, get_result_dir, run_single_image_inference

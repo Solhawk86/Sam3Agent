@@ -27,6 +27,7 @@ class LLMConfig:
     api_key: Optional[str]
     api_key_env: Optional[str]
     max_tokens: int
+    extra_body: dict[str, Any]
 
 
 @dataclass(frozen=True)

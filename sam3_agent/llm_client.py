@@ -3,10 +3,77 @@
 # pyre-unsafe
 
 import base64
+import json
 import os
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, Optional
 
 from openai import OpenAI
+
+
+@dataclass(frozen=True)
+class FunctionToolCall:
+    '''保存一个规范化后的原生 function tool call。'''
+
+    id: str
+    name: str
+    arguments: str
+
+    def as_dict(self) -> Dict[str, Any]:
+        '''转换为可追加到 assistant history 的消息字段。'''
+
+        return {
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments},
+        }
+
+
+@dataclass(frozen=True)
+class LLMResponse:
+    '''统一表示一次 LLM 返回的文本和原生工具调用。'''
+
+    content: Optional[str]
+    tool_calls: tuple[FunctionToolCall, ...] = ()
+
+    def as_assistant_message(self) -> Dict[str, Any]:
+        '''转换为 OpenAI-compatible assistant history 消息。'''
+
+        message: Dict[str, Any] = {
+            "role": "assistant",
+            "content": self.content,
+        }
+        if self.tool_calls:
+            message["tool_calls"] = [call.as_dict() for call in self.tool_calls]
+        return message
+
+    def as_dict(self) -> Dict[str, Any]:
+        '''转换为适合日志持久化的普通字典。'''
+
+        return {
+            "content": self.content,
+            "tool_calls": [call.as_dict() for call in self.tool_calls],
+        }
+
+
+def _normalize_tool_calls(
+    tool_calls: Optional[Iterable[Any]],
+) -> tuple[FunctionToolCall, ...]:
+    '''把 OpenAI SDK tool call 对象转换为稳定的内部类型。'''
+
+    normalized = []
+    for call in tool_calls or []:
+        arguments = call.function.arguments
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments)
+        normalized.append(
+            FunctionToolCall(
+                id=call.id,
+                name=call.function.name,
+                arguments=arguments,
+            )
+        )
+    return tuple(normalized)
 
 
 def get_image_base64_and_mime(image_path):
@@ -40,6 +107,10 @@ def send_generate_request(
     api_key=None,
     max_tokens=4096,
     verbose=True,
+    tools=None,
+    tool_choice=None,
+    parallel_tool_calls=None,
+    extra_body=None,
 ):
     """
     Sends a request to the OpenAI-compatible API endpoint using the OpenAI client library.
@@ -51,7 +122,7 @@ def send_generate_request(
         max_tokens (int): Maximum number of tokens to generate (default: 4096)
 
     Returns:
-        str: The generated response text from the server.
+        LLMResponse: The generated text and native tool calls from the server.
     """
     # Process messages to convert image paths to base64
     processed_messages = []
@@ -115,17 +186,33 @@ def send_generate_request(
     try:
         if verbose:
             print(f"🔍 Calling model {model}...")
+        request_kwargs = {
+            "model": model,
+            "messages": processed_messages,
+            "max_completion_tokens": max_tokens,
+            "n": 1,
+        }
+        if tools:
+            request_kwargs["tools"] = tools
+        if tool_choice is not None:
+            request_kwargs["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            request_kwargs["parallel_tool_calls"] = parallel_tool_calls
+        if extra_body:
+            request_kwargs["extra_body"] = extra_body
+
         response = client.chat.completions.create(
-            model=model,
-            messages=processed_messages,
-            max_completion_tokens=max_tokens,
-            n=1,
+            **request_kwargs,
         )
         # print(f"Received response: {response.choices[0].message}")
 
         # Extract the response content
         if response.choices and len(response.choices) > 0:
-            return response.choices[0].message.content
+            message = response.choices[0].message
+            return LLMResponse(
+                content=message.content,
+                tool_calls=_normalize_tool_calls(message.tool_calls),
+            )
         else:
             if verbose:
                 print(f"Unexpected response format: {response}")

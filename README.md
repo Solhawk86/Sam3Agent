@@ -44,17 +44,51 @@ history, and raw LLM responses below the output directory.
 
 ```python
 from sam3_agent.inference import run_single_image_inference
+from functools import partial
+
 from sam3_agent.llm_client import send_generate_request
 from sam3_agent.tools import Sam3Tool
 
 sam_tool = Sam3Tool(checkpoint_path="/path/to/checkpoint.pt")
+request = partial(
+    send_generate_request,
+    server_url="https://example/v1",
+    model="your-vision-model",
+    api_key="...",
+)
 result = run_single_image_inference(
     image_path="image.jpg",
     text_prompt="the person on the left",
     llm_config={"name": "vision-model"},
-    send_generate_request=send_generate_request,
+    send_generate_request=request,
     segmentation_tool=sam_tool,
     output_dir="outputs",
+)
+```
+
+The agent passes native OpenAI-compatible function definitions to the model and
+expects exactly one `assistant.tool_calls` entry per agent round. The endpoint must
+have native tool-call parsing enabled; XML-style `<tool>` responses are not
+supported.
+
+For Qwen3 reasoning models served through vLLM, disable thinking while the server
+parses function calls by adding this to the YAML `llm` section:
+
+```yaml
+extra_body:
+  chat_template_kwargs:
+    enable_thinking: false
+```
+
+The four public agent tools are available as independent classes:
+
+```python
+from sam3_agent.tools import (
+    ExamineEachMaskTool,
+    ReportNoMaskTool,
+    SegmentPhraseTool,
+    SelectMasksAndReturnTool,
+    ToolRegistry,
 )
 ```
 

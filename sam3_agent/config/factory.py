@@ -36,6 +36,9 @@ def build_llm_config(llm_config: dict[str, Any]) -> LLMConfig:
 
     model = llm_config.get("model") or os.environ.get("QWEN_MODEL")
     base_url = llm_config.get("base_url") or os.environ.get("QWEN_BASE_URL")
+    extra_body = llm_config.get("extra_body", {})
+    if not isinstance(extra_body, dict):
+        raise ValueError("llm.extra_body must be a mapping")
     return LLMConfig(
         provider=llm_config.get("provider", "openai"),
         name=llm_config.get("name") or model,
@@ -44,6 +47,7 @@ def build_llm_config(llm_config: dict[str, Any]) -> LLMConfig:
         api_key=api_key,
         api_key_env=api_key_env,
         max_tokens=llm_config.get("max_tokens", 4096),
+        extra_body=extra_body,
     )
 
 

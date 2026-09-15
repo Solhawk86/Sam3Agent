@@ -52,12 +52,13 @@ def main(argv=None):
         confidence_threshold=args.confidence_threshold,
         bpe_path=args.bpe_path,
     )
-    request = lambda messages: send_generate_request(
+    request = lambda messages, **request_options: send_generate_request(
         messages,
         server_url=base_url,
         model=model,
         api_key=api_key,
         verbose=args.verbose,
+        **request_options,
     )
     result = run_single_image_inference(
         image_path=str(Path(args.image).resolve()),

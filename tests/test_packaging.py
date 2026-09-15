@@ -1,18 +1,31 @@
 from pathlib import Path
 
 from sam3_agent.cli import build_parser
-from sam3_agent.tools import Sam3Tool
+from sam3_agent.tools import Sam3Tool, SegmentPhraseTool
+from sam3_agent.tools.sam3_tool import Sam3Tool as LegacyImportSam3Tool
 
 
 def test_prompt_files_are_packaged():
     prompt_dir = Path(__file__).parents[1] / "sam3_agent" / "system_prompts"
     assert (prompt_dir / "system_prompt.txt").exists()
     assert (prompt_dir / "system_prompt_iterative_checking.txt").exists()
+    assert "<tool>" not in (prompt_dir / "system_prompt.txt").read_text()
+    assert "<tool>" not in (prompt_dir / "system_prompt_zh.txt").read_text()
 
 
 def test_sam3_tool_is_lazy():
     tool = Sam3Tool(device="cpu")
     assert tool._processor is None
+
+
+def test_segment_phrase_tool_wraps_sam3_backend():
+    backend = Sam3Tool(device="cpu")
+    tool = SegmentPhraseTool(backend)
+    assert tool.segmentation_tool is backend
+
+
+def test_legacy_sam3_import_path_is_preserved():
+    assert LegacyImportSam3Tool is Sam3Tool
 
 
 def test_cli_requires_image_and_prompt():
