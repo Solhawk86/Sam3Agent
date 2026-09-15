@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sam3-agent"
+version = "0.1.0"
+description = "An LLM-driven visual grounding agent using SAM3 as a segmentation tool"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0",
+    "torch",
+    "torchvision",
+    "numpy<2",
+    "Pillow",
+    "opencv-python",
+    "pycocotools",
+    "matplotlib",
+    "iopath",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov"]
+
+[project.scripts]
+sam3-agent = "sam3_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sam3_agent*"]
+
+[tool.setuptools.package-data]
+sam3_agent = ["system_prompts/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]
