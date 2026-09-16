@@ -1,59 +1,38 @@
-from pathlib import Path
+'''批量工具注册与严格 schema 的公开契约。'''
 
 from sam3_agent.tools import (
-    ExamineEachMaskTool,
-    ReportNoMaskTool,
-    SegmentPhraseTool,
-    SelectMasksAndReturnTool,
+    AdvanceSegmentationTool,
     ToolContext,
     build_agent_tool_registry,
 )
 
 
-class StubSegmentationTool:
-    def segment_phrase(self, image_path, text_prompt, output_dir, verbose=False):
-        raise AssertionError("not called")
+def test_registry_exposes_only_advance_segmentation(tmp_path):
+    '''无论候选是否存在，唯一公开工具都是复合决策工具。'''
 
-
-def make_context(tmp_path: Path):
-    return ToolContext(
-        image_path=str(tmp_path / "input.png"),
-        initial_text_prompt="object",
-        sam_output_dir=str(tmp_path),
-        iterative_system_prompt="check",
-        send_generate_request=lambda messages, **kwargs: None,
-        save_llm_output=lambda response, filename: None,
-    )
-
-
-def test_registry_exports_state_dependent_native_schemas(tmp_path):
-    registry = build_agent_tool_registry(StubSegmentationTool())
-    context = make_context(tmp_path)
-
-    initial = registry.definitions(context)
-    assert [item["function"]["name"] for item in initial] == [
-        "segment_phrase",
-        "report_no_mask",
-    ]
-    assert all(item["type"] == "function" for item in initial)
-    assert all(item["function"]["strict"] is True for item in initial)
-    assert all(
-        item["function"]["parameters"]["additionalProperties"] is False
-        for item in initial
-    )
-
+    context = ToolContext(str(tmp_path / "image.png"), "fish", str(tmp_path))
+    registry = build_agent_tool_registry(object(), max_box_tasks_per_round=3)
+    definition = registry.definitions(context)[0]["function"]
+    assert definition["name"] == "advance_segmentation"
+    assert definition["strict"] is True
+    assert definition["parameters"]["properties"]["boxes"]["maxItems"] == 3
     context.current_outputs = {"pred_masks": ["encoded"]}
-    available = registry.definitions(context)
-    assert {item["function"]["name"] for item in available} == {
-        "segment_phrase",
-        "examine_each_mask",
-        "select_masks_and_return",
-        "report_no_mask",
-    }
+    assert len(registry.definitions(context)) == 1
+    assert AdvanceSegmentationTool.__module__.endswith(".advance_segmentation")
 
 
-def test_tool_classes_come_from_independent_modules():
-    assert SegmentPhraseTool.__module__.endswith(".segment_phrase")
-    assert ExamineEachMaskTool.__module__.endswith(".examine_each_mask")
-    assert SelectMasksAndReturnTool.__module__.endswith(".select_masks_and_return")
-    assert ReportNoMaskTool.__module__.endswith(".report_no_mask")
+def test_all_schema_objects_require_exact_fields():
+    '''嵌套对象也必须满足严格工具协议，不允许额外字段。'''
+
+    def inspect(schema):
+        '''递归检查 schema 中的对象及数组元素。'''
+
+        if schema.get("type") == "object":
+            assert schema["additionalProperties"] is False
+            assert set(schema["required"]) == set(schema["properties"])
+            for child in schema["properties"].values():
+                inspect(child)
+        if "items" in schema:
+            inspect(schema["items"])
+
+    inspect(AdvanceSegmentationTool(object()).parameters_schema)

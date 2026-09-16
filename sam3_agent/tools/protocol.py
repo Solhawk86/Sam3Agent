@@ -1,9 +1,10 @@
 '''Agent 工具的公共协议、运行上下文与注册表。'''
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, Optional, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Protocol
 
-from PIL import Image
+if TYPE_CHECKING:
+    from ..segmentation_memory.storage import MemorySession
 
 
 @dataclass(frozen=True)
@@ -92,21 +93,16 @@ class SingleImageSegmentationBackend(SegmentationTool, Protocol):
 
 @dataclass
 class ToolContext:
-    '''保存四个工具共享的单图 Agent 运行状态。'''
+    '''保存独立分割任务或批量 Agent 的单图上下文。'''
 
     image_path: str
     initial_text_prompt: str
     sam_output_dir: str
-    iterative_system_prompt: str
-    send_generate_request: Callable[..., Any]
-    save_llm_output: Callable[[Any, str], None]
     verbose: bool = False
+    memory_session: "MemorySession | None" = None
     latest_output_json: str = ""
     latest_text_prompt: str = ""
-    latest_segment_call_id: Optional[str] = None
     current_outputs: Optional[Dict[str, Any]] = None
-    used_text_prompts: set[str] = field(default_factory=set)
-    mask_check_count: int = 0
 
     @property
     def has_masks(self) -> bool:
@@ -123,8 +119,6 @@ class ToolResult:
     image_path: Optional[str] = None
     terminal: bool = False
     success: bool = True
-    final_outputs: Optional[Dict[str, Any]] = None
-    rendered_image: Optional[Image.Image] = None
 
     def as_tool_content(self) -> str:
         '''把结构化工具结果序列化成原生 tool 消息内容。'''

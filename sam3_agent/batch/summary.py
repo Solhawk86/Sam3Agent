@@ -31,11 +31,15 @@ def update_summary(
     success: bool,
     llm_requests: int,
     elapsed_sec: float,
+    status: str | None = None,
+    statistics: dict[str, Any] | None = None,
 ) -> None:
     """更新单张图片的运行状态、LLM 请求次数和耗时。"""
     summary = load_summary(summary_path)
     summary[image_name] = {
         "success": success,
+        "status": status or ("success" if success else "error"),
+        "statistics": statistics or {},
         "llm_requests": llm_requests,
         "elapsed_sec": round(elapsed_sec, 3),
     }

@@ -8,9 +8,10 @@ from sam3_agent.tools.sam3_tool import Sam3Tool as LegacyImportSam3Tool
 def test_prompt_files_are_packaged():
     prompt_dir = Path(__file__).parents[1] / "sam3_agent" / "system_prompts"
     assert (prompt_dir / "system_prompt.txt").exists()
-    assert (prompt_dir / "system_prompt_iterative_checking.txt").exists()
-    assert "<tool>" not in (prompt_dir / "system_prompt.txt").read_text()
-    assert "<tool>" not in (prompt_dir / "system_prompt_zh.txt").read_text()
+    prompt = (prompt_dir / "system_prompt.txt").read_text()
+    assert "advance_segmentation" in prompt
+    assert "<tool>" not in prompt
+    assert not (prompt_dir / "system_prompt_iterative_checking.txt").exists()
 
 
 def test_sam3_tool_is_lazy():

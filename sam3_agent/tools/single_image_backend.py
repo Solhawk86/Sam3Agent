@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import math
 import os
 from contextlib import nullcontext
 from pathlib import Path
@@ -15,6 +14,7 @@ from PIL import Image
 
 from ..helpers.mask_overlap_removal import remove_overlapping_masks
 from ..viz import visualize
+from .coordinates import validate_box, validate_number
 from .protocol import SegmentationResult
 
 
@@ -39,6 +39,19 @@ class Sam3Tool:
         self.load_from_hf = load_from_hf
         self.enable_inst_interactivity = enable_inst_interactivity
         self._processor = None
+
+    def prepare(self) -> None:
+        '''在首次 LLM 请求前加载模型并检查交互头，不替换已加载实例。'''
+
+        if not self.enable_inst_interactivity:
+            raise RuntimeError("Agent requires Sam3Tool(enable_inst_interactivity=True)")
+        self._interactive_model()
+
+    def synchronize(self) -> None:
+        '''等待当前 GPU 工作完成，让调用耗时包含实际计算。'''
+
+        if str(self.device).startswith("cuda"):
+            torch.cuda.synchronize(self.device)
 
     @property
     def processor(self):
@@ -102,12 +115,7 @@ class Sam3Tool:
     def _validate_number(value: Any, field_name: str) -> float:
         '''校验坐标值为有限实数。'''
 
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"{field_name} must contain only numbers")
-        number = float(value)
-        if not math.isfinite(number):
-            raise ValueError(f"{field_name} must contain only finite numbers")
-        return number
+        return validate_number(value, field_name)
 
     @classmethod
     def _validate_box(
@@ -119,16 +127,7 @@ class Sam3Tool:
     ) -> list[float]:
         '''校验像素 XYXY 框并返回浮点坐标。'''
 
-        if not isinstance(box, list) or len(box) != 4:
-            raise ValueError(f"{field_name} must be a four-number [x1, y1, x2, y2] array")
-        values = [cls._validate_number(value, field_name) for value in box]
-        x1, y1, x2, y2 = values
-        if not (0 <= x1 < x2 <= width and 0 <= y1 < y2 <= height):
-            raise ValueError(
-                f"{field_name} must satisfy 0 <= x1 < x2 <= {width} and "
-                f"0 <= y1 < y2 <= {height}"
-            )
-        return values
+        return validate_box(box, width, height, field_name)
 
     @classmethod
     def _validate_points(

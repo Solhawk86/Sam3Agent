@@ -16,7 +16,7 @@ class SegmentPhraseTool(BaseAgentTool):
     name = "segment_phrase"
     description = (
         "Use SAM3 to segment all instances matching one short, simple noun phrase "
-        "in the raw input image. A new call replaces all previous masks."
+        "in the raw input image."
     )
     parameters_schema = {
         "type": "object",
@@ -49,21 +49,6 @@ class SegmentPhraseTool(BaseAgentTool):
             raise ValueError("segment_phrase.text_prompt must be a non-empty string")
         text_prompt = text_prompt.strip()
 
-        if text_prompt in context.used_text_prompts:
-            return ToolResult(
-                content={
-                    "status": "error",
-                    "error": "duplicate_text_prompt",
-                    "message": (
-                        f"The text_prompt {text_prompt!r} was already used. Call "
-                        "segment_phrase again with a different noun phrase."
-                    ),
-                    "used_text_prompts": sorted(context.used_text_prompts),
-                },
-                success=False,
-            )
-
-        context.used_text_prompts.add(text_prompt)
         result = self.segmentation_tool.segment_phrase(
             image_path=context.image_path,
             text_prompt=text_prompt,

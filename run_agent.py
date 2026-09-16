@@ -29,6 +29,7 @@ def build_parser():
     parser.add_argument("--start-index", type=int)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-generations", type=int)
+    parser.add_argument("--max-box-tasks-per-round", type=int)
     parser.add_argument("--debug", action="store_true", default=None)
     parser.add_argument("--verbose", action="store_true", default=None)
     return parser

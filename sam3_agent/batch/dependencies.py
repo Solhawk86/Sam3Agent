@@ -39,6 +39,7 @@ def build_sam3_tool(config: RuntimeConfig):
         confidence_threshold=config.confidence_threshold,
         bpe_path=str(config.bpe_path) if config.bpe_path is not None else None,
         load_from_hf=config.load_from_hf,
+        enable_inst_interactivity=True,
     )
 
 

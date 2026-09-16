@@ -1,25 +1,17 @@
-'''当前 grounding Agent 使用的工具注册组合。'''
+'''批量记忆 Agent 的唯一工具注册入口。'''
 
-from .examine_each_mask import ExamineEachMaskTool
-from .protocol import SegmentationTool, ToolRegistry
-from .report_no_mask import ReportNoMaskTool
-from .segment_phrase import SegmentPhraseTool
-from .select_masks_and_return import SelectMasksAndReturnTool
+from .advance_segmentation import AdvanceSegmentationTool
+from .protocol import SingleImageSegmentationBackend, ToolRegistry
 
 
 def build_agent_tool_registry(
-    segmentation_tool: SegmentationTool,
+    segmentation_tool: SingleImageSegmentationBackend,
+    max_box_tasks_per_round: int = 4,
 ) -> ToolRegistry:
-    '''使用注入的分割后端创建当前四工具注册表。'''
+    '''注册复合决策工具，独立分割适配器仅供内部复用。'''
 
     return ToolRegistry(
         [
-            SegmentPhraseTool(segmentation_tool),
-            ExamineEachMaskTool(),
-            SelectMasksAndReturnTool(),
-            ReportNoMaskTool(),
+            AdvanceSegmentationTool(segmentation_tool, max_box_tasks_per_round),
         ]
     )
-
-
-__all__ = ["build_agent_tool_registry"]

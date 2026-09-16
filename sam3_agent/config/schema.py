@@ -59,6 +59,17 @@ class PromptConfig:
     require_match: bool
 
 
+def validate_agent_limits(max_generations: int, max_boxes: int) -> None:
+    '''校验请求预算及每批框数量，布尔值不作为整数配置接受。'''
+
+    for name, value, minimum in (
+        ("max_generations", max_generations, 0),
+        ("max_box_tasks_per_round", max_boxes, 1),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     """Agent 迭代与日志开关配置。"""
@@ -66,6 +77,12 @@ class AgentConfig:
     max_generations: int
     debug: bool
     verbose: bool
+    max_box_tasks_per_round: int = 4
+
+    def __post_init__(self) -> None:
+        '''在模型加载前拒绝无效运行预算。'''
+
+        validate_agent_limits(self.max_generations, self.max_box_tasks_per_round)
 
 
 @dataclass(frozen=True)

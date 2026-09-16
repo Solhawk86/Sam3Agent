@@ -82,6 +82,7 @@ def run_batch(config: RunConfig) -> None:
                 output_dir=str(config.output.output_dir),
                 debug=config.agent.debug,
                 max_generations=config.agent.max_generations,
+                max_box_tasks_per_round=config.agent.max_box_tasks_per_round,
                 final_mask_output_dir=(
                     str(config.output.final_mask_dir)
                     if config.output.final_mask_dir is not None
@@ -97,6 +98,8 @@ def run_batch(config: RunConfig) -> None:
                 status in {"success", "skipped"},
                 llm_request_counter["count"],
                 elapsed_sec,
+                status=status,
+                statistics=run_result.get("statistics"),
             )
             print(
                 f"[{idx}/{total} | {progress:6.2f}%] {status.upper():7s} {Path(image_path).name}",
@@ -112,6 +115,7 @@ def run_batch(config: RunConfig) -> None:
                 False,
                 llm_request_counter["count"],
                 elapsed_sec,
+                status="error",
             )
             print(
                 f"[{idx}/{total} | {progress:6.2f}%] FAILED  {Path(image_path).name}",

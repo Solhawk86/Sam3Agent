@@ -120,6 +120,9 @@ def build_run_config(
         ),
         agent=AgentConfig(
             max_generations=cli_or_config(args, agent_config, "max_generations", 20),
+            max_box_tasks_per_round=cli_or_config(
+                args, agent_config, "max_box_tasks_per_round", 4
+            ),
             debug=cli_or_config(args, agent_config, "debug", False),
             verbose=cli_or_config(args, agent_config, "verbose", False),
         ),

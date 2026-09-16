@@ -23,6 +23,7 @@ def build_parser():
     parser.add_argument("--base-url", default=None)
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--max-generations", type=int, default=20)
+    parser.add_argument("--max-box-tasks-per-round", type=int, default=4)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -51,6 +52,7 @@ def main(argv=None):
         device=args.sam3_device,
         confidence_threshold=args.confidence_threshold,
         bpe_path=args.bpe_path,
+        enable_inst_interactivity=True,
     )
     request = lambda messages, **request_options: send_generate_request(
         messages,
@@ -69,6 +71,7 @@ def main(argv=None):
         output_dir=args.output_dir,
         debug=args.debug,
         max_generations=args.max_generations,
+        max_box_tasks_per_round=args.max_box_tasks_per_round,
         final_mask_output_dir=args.final_mask_dir,
         verbose=args.verbose,
     )

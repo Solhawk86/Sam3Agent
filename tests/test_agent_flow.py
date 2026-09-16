@@ -1,3 +1,6 @@
+'''使用假 LLM 和 SAM 验证完整批量记忆流程。'''
+
+import copy
 import json
 from pathlib import Path
 
@@ -6,243 +9,423 @@ import pycocotools.mask as mask_utils
 import pytest
 from PIL import Image
 
-from sam3_agent.agent_core import count_images
-from sam3_agent.inference import run_single_image_inference
+from sam3_agent.inference import _build_union_binary_mask, run_single_image_inference
 from sam3_agent.llm_client import FunctionToolCall, LLMResponse
 from sam3_agent.tools.protocol import SegmentationResult
 
 
-def make_fixture_image(path: Path):
-    Image.new("RGB", (12, 10), (240, 240, 240)).save(path)
+def decision(
+    text=None, boxes=None, accept=(), reject=(), replace=(), inspect=(), finish=None
+):
+    '''构造完整的复合工具参数，审核理由使用固定测试结论。'''
 
-
-def make_segmentation_result(image_path: Path, output_dir: Path):
-    mask = np.zeros((10, 12), dtype=np.uint8)
-    mask[2:8, 3:9] = 1
-    encoded = mask_utils.encode(np.asfortranarray(mask))["counts"].decode("utf-8")
-    result_dir = output_dir / "sam" / image_path.stem
-    result_dir.mkdir(parents=True, exist_ok=True)
-    rendered_path = result_dir / "object.png"
-    Image.open(image_path).save(rendered_path)
-    data = {
-        "original_image_path": str(image_path),
-        "output_image_path": str(rendered_path),
-        "orig_img_h": 10,
-        "orig_img_w": 12,
-        "pred_boxes": [[0.25, 0.2, 0.5, 0.6]],
-        "pred_masks": [encoded],
-        "pred_scores": [0.9],
+    return {
+        "review": {
+            "accept": [{"mask_id": key, "reason": "correct target"} for key in accept],
+            "reject": [{"mask_id": key, "reason": "wrong region"} for key in reject],
+            "replace": list(replace),
+        },
+        "text_prompt": text,
+        "boxes": [{"box": box} for box in (boxes or [])],
+        "inspect_mask_ids": list(inspect),
+        "finish": finish is not None,
+        "finish_reason": finish,
     }
-    json_path = result_dir / "object.json"
-    json_path.write_text(json.dumps(data))
-    return SegmentationResult(str(json_path), str(rendered_path), data)
 
 
-def native_tool_response(name, arguments, call_id="call_1", content="analysis"):
-    raw_arguments = arguments if isinstance(arguments, str) else json.dumps(arguments)
+def response(arguments, call_id="call", name="advance_segmentation"):
+    '''构造 SDK 无关的原生工具响应。'''
+
     return LLMResponse(
-        content=content,
-        tool_calls=(FunctionToolCall(call_id, name, raw_arguments),),
+        None,
+        (
+            FunctionToolCall(
+                call_id,
+                name,
+                arguments if isinstance(arguments, str) else json.dumps(arguments),
+            ),
+        ),
     )
 
 
-class FakeSegmentationTool:
-    def __init__(self, image_path, output_dir):
-        self.image_path = image_path
-        self.output_dir = output_dir
+def rectangle(left=2, top=2, right=8, bottom=8):
+    '''生成可验证并集和替换结果的二值矩形。'''
+
+    mask = np.zeros((10, 12), dtype=np.uint8)
+    mask[top:bottom, left:right] = 1
+    return mask
+
+
+class FakeBackend:
+    '''记录任务顺序并按脚本返回候选或模拟错误。'''
+
+    def __init__(self, outcomes=None):
+        '''初始化不依赖 GPU 的执行记录。'''
+
+        self.outcomes = list(outcomes or [])
         self.calls = []
+        self.prepared = False
+        self.builds = 0
+
+    def prepare(self):
+        '''模拟幂等模型准备。'''
+
+        if not self.prepared:
+            self.prepared = True
+            self.builds += 1
+
+    def _segment(self, branch, arguments, image_path, output_dir):
+        '''在独立目录保存本次候选，不接触主运行记忆。'''
+
+        assert self.prepared
+        self.calls.append((branch, arguments, output_dir))
+        outcome = self.outcomes.pop(0) if self.outcomes else rectangle()
+        if isinstance(outcome, Exception):
+            raise outcome
+        masks = [] if outcome is None else [outcome]
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        encoded = [
+            mask_utils.encode(np.asfortranarray(mask))["counts"].decode()
+            for mask in masks
+        ]
+        data = {
+            "original_image_path": image_path,
+            "orig_img_h": 10,
+            "orig_img_w": 12,
+            "pred_boxes": [[0, 0, 1, 1] for _ in masks],
+            "pred_scores": [0.9 for _ in masks],
+            "pred_masks": encoded,
+        }
+        output_json = output_dir / "result.json"
+        output_image = output_dir / "result.png"
+        output_json.write_text(json.dumps(data))
+        with Image.open(image_path) as image:
+            image.save(output_image)
+        return SegmentationResult(str(output_json), str(output_image), data)
 
     def segment_phrase(self, image_path, text_prompt, output_dir, verbose=False):
-        self.calls.append((image_path, text_prompt, output_dir))
-        return make_segmentation_result(self.image_path, self.output_dir)
+        '''记录文本分支任务。'''
+
+        return self._segment("text", text_prompt, image_path, output_dir)
+
+    def segment_instance_with_box(self, image_path, box, output_dir, verbose=False):
+        '''记录框分支任务。'''
+
+        return self._segment("box", box, image_path, output_dir)
 
 
 class FakeRequest:
-    def __init__(self, responses):
+    '''保存每次真实主循环请求，禁止额外隐藏请求。'''
+
+    def __init__(self, responses, backend):
+        '''绑定已加载后端和有限响应序列。'''
+
         self.responses = iter(responses)
+        self.backend = backend
         self.calls = []
 
     def __call__(self, messages, **options):
-        self.calls.append((messages, options))
+        '''确保先准备后端，再消耗一条模型响应。'''
+
+        assert self.backend.prepared
+        self.calls.append((copy.deepcopy(messages), options))
         return next(self.responses)
 
 
-def run_with_responses(tmp_path, responses, prompt="the object", **kwargs):
+@pytest.fixture
+def run_agent(tmp_path):
+    '''提供带隔离输入、输出目录的完整推理入口。'''
+
     image_path = tmp_path / "input.png"
-    make_fixture_image(image_path)
-    tool = FakeSegmentationTool(image_path, tmp_path)
-    request = FakeRequest(responses)
-    result = run_single_image_inference(
-        image_path=str(image_path),
-        text_prompt=prompt,
-        llm_config={"name": "fake"},
-        send_generate_request=request,
-        segmentation_tool=tool,
-        output_dir=str(tmp_path / "outputs"),
-        **kwargs,
-    )
-    return result, tool, request
+    Image.new("RGB", (12, 10), "gray").save(image_path)
 
+    def run(responses, backend=None, **kwargs):
+        '''使用脚本响应执行单图推理并读取状态快照。'''
 
-def test_segment_and_select_flow(tmp_path):
-    result, tool, request = run_with_responses(
-        tmp_path,
-        [
-            native_tool_response(
-                "segment_phrase", {"text_prompt": "object"}, "call_segment"
-            ),
-            native_tool_response(
-                "select_masks_and_return",
-                {"final_answer_masks": [1]},
-                "call_select",
-            ),
-        ],
-        final_mask_output_dir=str(tmp_path / "final_masks"),
-        verbose=False,
-    )
-
-    assert result["status"] == "success"
-    assert len(tool.calls) == 1
-    assert Path(result["output_json_path"]).exists()
-    assert Path(result["output_image_path"]).exists()
-    assert Path(result["final_mask_path"]).exists()
-
-    first_tool_names = {
-        item["function"]["name"] for item in request.calls[0][1]["tools"]
-    }
-    second_tool_names = {
-        item["function"]["name"] for item in request.calls[1][1]["tools"]
-    }
-    assert first_tool_names == {"segment_phrase", "report_no_mask"}
-    assert second_tool_names == {
-        "segment_phrase",
-        "examine_each_mask",
-        "select_masks_and_return",
-        "report_no_mask",
-    }
-    assert request.calls[0][1]["tool_choice"] == "required"
-    assert request.calls[0][1]["parallel_tool_calls"] is False
-
-    history = json.loads(Path(result["agent_history_path"]).read_text())
-    assistant = next(item for item in history if item.get("tool_calls"))
-    tool_message = next(item for item in history if item.get("role") == "tool")
-    assert assistant["tool_calls"][0]["id"] == tool_message["tool_call_id"]
-
-
-def test_report_no_mask_does_not_call_segmentation_tool(tmp_path):
-    result, tool, _ = run_with_responses(
-        tmp_path,
-        [native_tool_response("report_no_mask", {}, "call_none")],
-        prompt="a unicorn",
-    )
-
-    assert result["status"] == "success"
-    assert tool.calls == []
-    output = json.loads(Path(result["output_json_path"]).read_text())
-    assert output["pred_masks"] == []
-
-
-def test_duplicate_prompt_is_not_sent_to_segmentation_tool(tmp_path):
-    _, tool, _ = run_with_responses(
-        tmp_path,
-        [
-            native_tool_response(
-                "segment_phrase", {"text_prompt": "object"}, "call_segment"
-            ),
-            native_tool_response(
-                "segment_phrase", {"text_prompt": "object"}, "call_duplicate"
-            ),
-            native_tool_response(
-                "select_masks_and_return",
-                {"final_answer_masks": [1]},
-                "call_select",
-            ),
-        ],
-    )
-
-    assert [call[1] for call in tool.calls] == ["object"]
-
-
-def test_examine_each_mask_accepts_and_returns_selected_mask(tmp_path):
-    result, _, _ = run_with_responses(
-        tmp_path,
-        [
-            native_tool_response(
-                "segment_phrase", {"text_prompt": "object"}, "call_segment"
-            ),
-            native_tool_response("examine_each_mask", {}, "call_examine"),
-            LLMResponse(
-                content="<think>the mask matches</think><verdict>Accept</verdict>"
-            ),
-            native_tool_response(
-                "select_masks_and_return",
-                {"final_answer_masks": [1]},
-                "call_select",
-            ),
-        ],
-    )
-
-    assert result["status"] == "success"
-    history = json.loads(Path(result["agent_history_path"]).read_text())
-    assert count_images(history) <= 2
-
-
-def test_generation_limit_is_enforced(tmp_path):
-    with pytest.raises(ValueError, match="maximum number"):
-        run_with_responses(
-            tmp_path,
-            [
-                native_tool_response(
-                    "segment_phrase", {"text_prompt": "object"}, "call_segment"
-                )
-            ],
-            max_generations=0,
+        backend = backend or FakeBackend()
+        request = FakeRequest(responses, backend)
+        result = run_single_image_inference(
+            str(image_path),
+            "fish",
+            {"name": "fake"},
+            request,
+            backend,
+            output_dir=str(tmp_path / "output"),
+            final_mask_output_dir=str(tmp_path / "final"),
+            **kwargs,
         )
+        state = json.loads(
+            (Path(result["result_dir"]) / "memory" / "state.json").read_text()
+        )
+        return result, state, backend, request
+
+    return run
+
+
+def test_text_and_three_boxes_finish_in_two_requests(run_agent):
+    '''一个文本与三个框只需两次 LLM 请求，跨分支相同像素仍独立入库。'''
+
+    result, state, backend, request = run_agent(
+        [
+            response(
+                decision(
+                    text=" fish ", boxes=[[0, 0, 3, 4], [3, 0, 6, 4], [6, 0, 9, 4]]
+                ),
+                "first",
+            ),
+            response(
+                decision(accept=["m1", "m2", "m3", "m4"], finish="complete"), "last"
+            ),
+        ]
+    )
+    assert result["status"] == "success"
+    assert [call[0] for call in backend.calls] == ["text", "box", "box", "box"]
+    assert len(request.calls) == result["statistics"]["llm_requests"] == 2
+    assert len(state["candidates"]) == 4
+    assert len({item["rle"] for item in state["candidates"].values()}) == 1
+    assert len({call[2] for call in backend.calls}) == 4
+    for messages, options in request.calls:
+        assert [item["function"]["name"] for item in options["tools"]] == [
+            "advance_segmentation"
+        ]
+        assert options["parallel_tool_calls"] is False
+        assert (
+            sum(
+                part.get("type") == "image"
+                for message in messages
+                for part in (message.get("content") or [])
+                if isinstance(part, dict)
+            )
+            <= 2
+        )
+    assert Path(result["final_mask_path"]).is_file()
+    assert set(np.asarray(Image.open(result["final_mask_path"])).ravel()) == {0, 255}
+
+
+def test_review_and_next_batch_preserve_then_replace(run_agent):
+    '''下一轮审核和新任务同时执行，替换旧结果时保留其他目标共享像素。'''
+
+    first, other, better = rectangle(), rectangle(6, 1, 11, 5), rectangle(2, 2, 5, 6)
+    result, state, _, request = run_agent(
+        [
+            response(decision(text="fish", boxes=[[6, 1, 11, 5]])),
+            response(decision(accept=["m1", "m2"], boxes=[[2, 2, 5, 6]])),
+            response(
+                decision(
+                    replace=[
+                        {
+                            "old_mask_ids": ["m1"],
+                            "new_mask_ids": ["m3"],
+                            "reason": "less background",
+                        }
+                    ],
+                    finish="complete",
+                )
+            ),
+        ],
+        FakeBackend([first, other, better]),
+    )
+    assert len(request.calls) == 3
+    assert state["candidates"]["m1"]["status"] == "superseded"
+    assert state["candidates"]["m2"]["status"] == "accepted"
+    outputs = json.loads(Path(result["output_json_path"]).read_text())
+    np.testing.assert_array_equal(
+        _build_union_binary_mask(outputs), (other | better) * 255
+    )
 
 
 @pytest.mark.parametrize(
-    ("responses", "error"),
+    "bad_change",
     [
-        ([LLMResponse(content="no call")], "exactly one native tool call"),
-        (
-            [
-                LLMResponse(
-                    content=None,
-                    tool_calls=(
-                        FunctionToolCall("one", "segment_phrase", "{}"),
-                        FunctionToolCall("two", "report_no_mask", "{}"),
-                    ),
-                )
-            ],
-            "exactly one native tool call",
-        ),
-        (
-            [native_tool_response("segment_phrase", "{not-json")],
-            "Invalid JSON arguments",
-        ),
-        ([native_tool_response("unknown", {})], "Unknown tool call"),
-        (
-            [native_tool_response("segment_phrase", {"text_prompt": "x", "extra": 1})],
-            "must contain exactly",
-        ),
+        {"boxes": [{"box": [0, 0, 100, 5]}]},
+        {
+            "review": {
+                "accept": [{"mask_id": "m1", "reason": "ok"}],
+                "reject": [{"mask_id": "m1", "reason": "wrong"}],
+                "replace": [],
+            }
+        },
+        {
+            "review": {
+                "accept": [{"mask_id": "m999", "reason": "future"}],
+                "reject": [],
+                "replace": [],
+            }
+        },
+        {"finish": True, "finish_reason": "complete"},
+        {"finish": 1},
     ],
 )
-def test_invalid_native_tool_calls_raise_clear_errors(tmp_path, responses, error):
-    with pytest.raises((TypeError, ValueError), match=error):
-        run_with_responses(tmp_path, responses)
+def test_invalid_batch_does_not_apply_reviews_or_execute(run_agent, bad_change):
+    '''整批无效时不产生部分审核，也不执行其文本任务。'''
+
+    invalid = decision(accept=["m1"], text="another fish")
+    invalid.update(bad_change)
+    result, state, backend, request = run_agent(
+        [
+            response(decision(text="fish")),
+            response(invalid),
+        ],
+        max_generations=2,
+    )
+    assert result["status"] == "partial"
+    assert len(backend.calls) == 1
+    assert state["candidates"]["m1"]["status"] == "pending"
+    assert state["review_history"] == []
+    assert state["statistics"]["llm_requests"] == 2
 
 
-@pytest.mark.parametrize("selected", [[1, 1], [2], [], [True]])
-def test_invalid_mask_selection_is_rejected(tmp_path, selected):
-    responses = [
-        native_tool_response(
-            "segment_phrase", {"text_prompt": "object"}, "call_segment"
+def test_exact_requests_reuse_empty_and_nonempty_results(run_agent):
+    '''同分支相同参数复用结果，正常空结果也进入请求索引。'''
+
+    result, state, backend, _ = run_agent(
+        [
+            response(decision(text="fish", boxes=[[0, 0, 4, 4], [0.0, 0, 4, 4]])),
+            response(decision(text=" fish ", boxes=[[0, 0, 4, 4]], accept=["m1"])),
+            response(decision(finish="complete")),
+        ],
+        FakeBackend([rectangle(), None]),
+    )
+    assert result["status"] == "success"
+    assert len(backend.calls) == 2
+    assert state["statistics"]["cache_hits"] == 3
+    assert len(state["candidates"]) == 1
+
+
+def test_recoverable_error_does_not_clear_success_and_can_retry(run_agent):
+    '''单项普通执行错误不阻止其他任务，并允许之后重试相同输入。'''
+
+    result, state, backend, _ = run_agent(
+        [
+            response(decision(text="fish", boxes=[[0, 0, 4, 4], [5, 0, 9, 4]])),
+            response(decision(accept=["m1", "m2"], boxes=[[0, 0, 4, 4]])),
+            response(decision(accept=["m3"], finish="complete")),
+        ],
+        FakeBackend(
+            [
+                rectangle(),
+                RuntimeError("temporary model failure"),
+                rectangle(),
+                rectangle(),
+            ]
         ),
-        native_tool_response(
-            "select_masks_and_return",
-            {"final_answer_masks": selected},
-            "call_select",
-        ),
-    ]
-    with pytest.raises(ValueError):
-        run_with_responses(tmp_path, responses)
+    )
+    assert result["status"] == "success"
+    assert len(backend.calls) == 4
+    assert state["attempts"]["t2"]["status"] == "error"
+    assert state["candidates"]["m1"]["status"] == "accepted"
+
+
+def test_cuda_error_stops_remaining_tasks_and_exports_accepted_only(run_agent):
+    '''CUDA 错误停止剩余任务，保留本轮已审核结果为部分输出。'''
+
+    result, state, backend, request = run_agent(
+        [
+            response(decision(text="fish")),
+            response(decision(accept=["m1"], boxes=[[0, 0, 4, 4], [5, 0, 9, 4]])),
+        ],
+        FakeBackend([rectangle(), RuntimeError("CUDA out of memory")]),
+    )
+    assert result["status"] == "partial"
+    assert result["termination_reason"] == "backend_error"
+    assert len(backend.calls) == len(request.calls) == 2
+    assert state["attempts"]["t3"]["status"] == "not_run"
+    assert (
+        len(json.loads(Path(result["output_json_path"]).read_text())["pred_masks"]) == 1
+    )
+    assert Path(result["final_mask_path"]).name == "partial_mask.png"
+    assert not (Path(result["result_dir"]) / "pred.json").exists()
+
+
+def test_rejected_mask_requires_visible_inspection_before_reaccept(run_agent):
+    '''拒绝候选重新接受前先查看局部图，检查动作不触发隐藏请求。'''
+
+    result, state, backend, request = run_agent(
+        [
+            response(decision(text="fish")),
+            response(decision(reject=["m1"])),
+            response(decision(accept=["m1"], finish="complete")),
+            response(decision(inspect=["m1"])),
+            response(decision(accept=["m1"], finish="complete")),
+        ]
+    )
+    assert result["status"] == "success"
+    assert len(backend.calls) == 1
+    assert len(request.calls) == 5
+    assert state["candidates"]["m1"]["status"] == "accepted"
+    assert "invalid_decision" in request.calls[3][0][3]["content"]
+
+
+def test_partial_rerun_keeps_old_artifacts_and_does_not_skip(run_agent):
+    '''不完整运行可重新执行，旧运行的候选、历史和部分结果保留。'''
+
+    first, _, backend, _ = run_agent(
+        [response(decision(text="fish"))], max_generations=1
+    )
+    second, _, _, _ = run_agent(
+        [
+            response(decision(text="fish")),
+            response(decision(accept=["m1"], finish="complete")),
+        ],
+        backend,
+    )
+    assert first["status"] == "partial" and second["status"] == "success"
+    assert first["run_dir"] != second["run_dir"]
+    assert (Path(first["run_dir"]) / "partial_pred.json").is_file()
+    assert backend.builds == 1
+
+
+@pytest.mark.parametrize(
+    "reply,reason",
+    [
+        (None, "llm_no_response"),
+        (LLMResponse("no tool call"), "protocol_error"),
+    ],
+)
+def test_invalid_response_preserves_audit_and_partial_state(run_agent, reply, reason):
+    '''无响应或不可恢复协议错误不伪造成功结论。'''
+
+    result, state, _, request = run_agent([reply])
+    assert result["status"] == "partial"
+    assert state["termination_reason"] == reason
+    assert len(request.calls) == 1
+
+
+def test_json_error_and_unknown_tool_are_recoverable(run_agent):
+    '''可回复到单一调用的协议错误占用预算，但允许下一轮纠正。'''
+
+    result, _, backend, request = run_agent(
+        [
+            response("{broken"),
+            response({}, name="segment_phrase"),
+            response(decision(finish="no_target")),
+        ]
+    )
+    assert result["status"] == "success"
+    assert result["termination_reason"] == "no_target"
+    assert len(request.calls) == 3 and not backend.calls
+
+
+def test_zero_budget_exports_empty_partial_without_llm(run_agent):
+    '''零预算不发起 LLM 请求，也不自动认定无目标。'''
+
+    result, state, backend, request = run_agent([], max_generations=0)
+    assert result["status"] == "partial"
+    assert state["termination_reason"] == "budget_exhausted"
+    assert not backend.calls and not request.calls
+
+
+def test_startup_failure_never_calls_llm(run_agent):
+    '''模型加载失败在任何 LLM 请求之前报错并保存启动状态。'''
+
+    class BrokenBackend(FakeBackend):
+        '''模拟模型启动失败。'''
+
+        def prepare(self):
+            '''直接报告缺少模型权重。'''
+
+            raise RuntimeError("missing checkpoint")
+
+    with pytest.raises(RuntimeError, match="missing checkpoint"):
+        run_agent([], BrokenBackend())

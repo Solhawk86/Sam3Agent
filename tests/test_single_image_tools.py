@@ -116,9 +116,6 @@ def make_context(tmp_path: Path) -> ToolContext:
         image_path=str(tmp_path / "input.png"),
         initial_text_prompt="object",
         sam_output_dir=str(tmp_path / "sam"),
-        iterative_system_prompt="check",
-        send_generate_request=lambda messages, **kwargs: None,
-        save_llm_output=lambda response, filename: None,
     )
 
 
