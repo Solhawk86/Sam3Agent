@@ -6,7 +6,7 @@ from sam3_agent.tools import (
     SegmentPhraseTool,
     SelectMasksAndReturnTool,
     ToolContext,
-    ToolRegistry,
+    build_agent_tool_registry,
 )
 
 
@@ -27,14 +27,7 @@ def make_context(tmp_path: Path):
 
 
 def test_registry_exports_state_dependent_native_schemas(tmp_path):
-    registry = ToolRegistry(
-        [
-            SegmentPhraseTool(StubSegmentationTool()),
-            ExamineEachMaskTool(),
-            SelectMasksAndReturnTool(),
-            ReportNoMaskTool(),
-        ]
-    )
+    registry = build_agent_tool_registry(StubSegmentationTool())
     context = make_context(tmp_path)
 
     initial = registry.definitions(context)

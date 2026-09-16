@@ -13,6 +13,7 @@ from .protocol import (
 from .refine_instance_with_background_points import (
     RefineInstanceWithBackgroundPointsTool,
 )
+from .registration import build_agent_tool_registry
 from .report_no_mask import ReportNoMaskTool
 from .segment_instance_with_box import SegmentInstanceWithBoxTool
 from .segment_instance_with_foreground_points import (
@@ -47,4 +48,5 @@ __all__ = [
     "ToolContext",
     "ToolRegistry",
     "ToolResult",
+    "build_agent_tool_registry",
 ]

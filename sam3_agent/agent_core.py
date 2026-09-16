@@ -11,12 +11,8 @@ from typing import Any
 
 from .llm_client import LLMResponse, send_generate_request
 from .tools import (
-    ExamineEachMaskTool,
-    ReportNoMaskTool,
-    SegmentPhraseTool,
-    SelectMasksAndReturnTool,
     ToolContext,
-    ToolRegistry,
+    build_agent_tool_registry,
 )
 from .tools.protocol import SegmentationTool
 
@@ -183,19 +179,6 @@ def _parse_single_tool_call(response: LLMResponse):
     return tool_call, arguments
 
 
-def _build_tool_registry(segmentation_tool: SegmentationTool) -> ToolRegistry:
-    '''使用注入的分割后端创建四工具注册表。'''
-
-    return ToolRegistry(
-        [
-            SegmentPhraseTool(segmentation_tool),
-            ExamineEachMaskTool(),
-            SelectMasksAndReturnTool(),
-            ReportNoMaskTool(),
-        ]
-    )
-
-
 def _save_failed_history(messages, error_save_dir, img_path, verbose):
     '''在 LLM 无响应时保存导致失败的消息历史。'''
 
@@ -279,7 +262,7 @@ def agent_inference(
         ),
         verbose=verbose,
     )
-    registry = _build_tool_registry(segmentation_tool)
+    registry = build_agent_tool_registry(segmentation_tool)
     generation_count = 0
 
     while generation_count < max_generations:
