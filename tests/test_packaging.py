@@ -16,6 +16,15 @@ def test_prompt_files_are_packaged():
 def test_sam3_tool_is_lazy():
     tool = Sam3Tool(device="cpu")
     assert tool._processor is None
+    assert tool.enable_inst_interactivity is False
+
+
+def test_sam3_tool_can_enable_interactive_instance_head():
+    '''验证交互实例头必须由调用方显式启用。'''
+
+    tool = Sam3Tool(device="cpu", enable_inst_interactivity=True)
+    assert tool._processor is None
+    assert tool.enable_inst_interactivity is True
 
 
 def test_segment_phrase_tool_wraps_sam3_backend():

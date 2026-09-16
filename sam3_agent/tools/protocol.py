@@ -28,6 +28,68 @@ class SegmentationTool(Protocol):
         '''根据短语返回 masks、boxes、scores 和渲染图。'''
 
 
+class SingleImageSegmentationBackend(SegmentationTool, Protocol):
+    '''定义七种单图分割工具共用的 SAM3 后端接口。'''
+
+    def segment_visual_examples(
+        self,
+        image_path: str,
+        examples: list[Dict[str, Any]],
+        output_dir: str,
+        verbose: bool = False,
+    ) -> SegmentationResult:
+        '''根据正负视觉样例框执行概念分割。'''
+
+    def segment_phrase_with_visual_examples(
+        self,
+        image_path: str,
+        text_prompt: str,
+        examples: list[Dict[str, Any]],
+        output_dir: str,
+        verbose: bool = False,
+    ) -> SegmentationResult:
+        '''根据文本和正负视觉样例框执行概念分割。'''
+
+    def segment_instance_with_foreground_points(
+        self,
+        image_path: str,
+        points: list[list[float]],
+        output_dir: str,
+        refinement_handle: Optional[str] = None,
+        verbose: bool = False,
+    ) -> SegmentationResult:
+        '''根据前景点创建或细化一个实例。'''
+
+    def refine_instance_with_background_points(
+        self,
+        image_path: str,
+        points: list[list[float]],
+        refinement_handle: str,
+        output_dir: str,
+        verbose: bool = False,
+    ) -> SegmentationResult:
+        '''根据背景点和历史 logits 细化一个实例。'''
+
+    def segment_instance_with_box(
+        self,
+        image_path: str,
+        box: list[float],
+        output_dir: str,
+        verbose: bool = False,
+    ) -> SegmentationResult:
+        '''根据定位框分割一个实例。'''
+
+    def segment_instance_with_points_and_box(
+        self,
+        image_path: str,
+        box: list[float],
+        points: list[Dict[str, Any]],
+        output_dir: str,
+        verbose: bool = False,
+    ) -> SegmentationResult:
+        '''根据带标签的点和定位框分割一个实例。'''
+
+
 @dataclass
 class ToolContext:
     '''保存四个工具共享的单图 Agent 运行状态。'''
