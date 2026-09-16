@@ -59,7 +59,7 @@ Tests use `pytest`; files should be named `test_*.py` and placed under `tests/`.
 
 ## Commit & Pull Request Guidelines
 
-Current history uses concise imperative commits, for example `Create standalone SAM3 agent project`. Keep commit subjects short and action-oriented. Pull requests should describe the behavior change, list test commands run, note any config or checkpoint assumptions, and include sample output paths when changing inference or batch outputs.
+Commits must be split by coherent functional change; never combine unrelated features, refactors, fixes, or tests into one large commit. Every commit subject must be written in Chinese, remain concise, and describe the completed functional change. Pull requests should describe the behavior change, list test commands run, note any config or checkpoint assumptions, and include sample output paths when changing inference or batch outputs.
 
 ## Security & Configuration Tips
 
