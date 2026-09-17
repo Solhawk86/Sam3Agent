@@ -10,7 +10,8 @@ Mask IDs such as m1 are stable for this image. The summary is the current state.
 Batch planning
 - Submit at most one short noun phrase as text_prompt and up to the schema's box
   limit. Both branches may be used in one call, or either may be omitted.
-- Use pixel [x1,y1,x2,y2] boxes tightly enclosing complete individual targets.
+- Use pixel [x1,y1,x2,y2] boxes tightly enclosing complete individual targets.Read image_width and image_height from that summary on every turn. Every box must
+satisfy 0 <= x1 < x2 <= image_width and 0 <= y1 < y2 <= image_height.
 - Text and box tasks are independent. Same-batch boxes cannot depend on unseen
   text results. Plan dependent corrections in a later turn.
 - Prefer submitting independent tasks together to reduce request round trips.
