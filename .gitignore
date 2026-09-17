@@ -11,3 +11,5 @@ agent_output/
 *.pth
 *.safetensors
 result
+docs
+agent_config.yaml
