@@ -2,12 +2,17 @@
 
 import colorsys
 
+import cv2
 import numpy as np
 import pycocotools.mask as mask_utils
 from PIL import Image, ImageDraw, ImageFont
 
 from ..helpers.zoom_in import render_zoom_in
 from .models import Candidate, SegmentationMemory
+
+
+MASK_FILL_ALPHA = 0.15
+PANEL_GUTTER_COLOR = (72, 72, 72)
 
 
 def _font(size: int) -> ImageFont.ImageFont:
@@ -52,7 +57,23 @@ def render_candidates(
             )
             * 255
         )
-        pixels[binary] = (pixels[binary] * 0.65 + color * 0.35).astype(np.uint8)
+        color_uint8 = tuple(map(int, color))
+        pixels[binary] = (
+            pixels[binary] * (1 - MASK_FILL_ALPHA) + color * MASK_FILL_ALPHA
+        ).astype(np.uint8)
+        contours, _ = cv2.findContours(
+            binary.astype(np.uint8),
+            cv2.RETR_LIST,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+        cv2.drawContours(
+            pixels,
+            contours,
+            -1,
+            color_uint8,
+            max(2, round(min(memory.width, memory.height) / 300)),
+            lineType=cv2.LINE_AA,
+        )
         rows, columns = np.nonzero(binary)
         if len(rows):
             middle = len(rows) // 2
@@ -63,7 +84,7 @@ def render_candidates(
             (
                 position,
                 f"{candidate.mask_id}/{candidate.branch}",
-                tuple(map(int, color)),
+                color_uint8,
             )
         )
     image = Image.fromarray(pixels)
@@ -88,7 +109,12 @@ def render_board(memory: SegmentationMemory, inspect_ids: list[str]) -> Image.Im
             item for item in memory.candidates.values() if item.status == status
         ]
         visible_ids.extend(item.mask_id for item in candidates)
-        panels.append(_caption(render_candidates(memory, candidates), status.upper()))
+        panels.append(
+            _caption(
+                render_candidates(memory, candidates),
+                f"{status.upper()} ({len(candidates)})",
+            )
+        )
     with Image.open(memory.image_path) as original:
         for mask_id in inspect_ids:
             candidate = memory.candidates[mask_id]
@@ -116,11 +142,21 @@ def render_board(memory: SegmentationMemory, inspect_ids: list[str]) -> Image.Im
                 visible_ids.append(mask_id)
     rows = [panels[index : index + 2] for index in range(0, len(panels), 2)]
     heights = [max(panel.height for panel in row) for row in rows]
-    board = Image.new("RGB", (memory.width * 2, sum(heights)), "white")
+    gutter = max(16, round(memory.width * 0.025))
+    board = Image.new(
+        "RGB",
+        (memory.width * 2 + gutter, sum(heights)),
+        "white",
+    )
+    ImageDraw.Draw(board).rectangle(
+        (memory.width, 0, memory.width + gutter - 1, board.height - 1),
+        fill=PANEL_GUTTER_COLOR,
+    )
     y = 0
     for row, height in zip(rows, heights):
         for column, panel in enumerate(row):
-            board.paste(panel, (column * memory.width, y))
+            x = 0 if column == 0 else memory.width + gutter
+            board.paste(panel, (x, y))
         y += height
     memory.visible_ids = visible_ids
     return board
