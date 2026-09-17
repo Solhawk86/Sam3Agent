@@ -260,6 +260,47 @@ def test_text_and_three_boxes_finish_in_two_requests(run_agent):
     assert set(np.asarray(Image.open(result["final_mask_path"])).ravel()) == {0, 255}
 
 
+@pytest.mark.parametrize("branch", ["text", "box"])
+def test_masks_and_closeups_arrive_together_without_inspection_turn(run_agent, branch):
+    '''文本和框分割均在首次结果回传时附带局部图，两次请求即可审核结束。'''
+
+    first = decision(text="fish") if branch == "text" else decision(boxes=[[1, 1, 9, 9]])
+    result, state, backend, request = run_agent(
+        [
+            response(first, "segment"),
+            response(decision(accept=["m1"], finish="complete"), "review"),
+        ],
+        max_generations=2,
+    )
+
+    assert result["status"] == "success"
+    assert len(request.calls) == result["statistics"]["llm_requests"] == 2
+    assert len(backend.calls) == 1
+    messages = request.calls[1][0]
+    summary = json.loads(messages[1]["content"][1]["text"])
+    tool_result = json.loads(messages[3]["content"])
+    assert summary["inspection_mask_ids"] == ["m1"]
+    assert tool_result["inspection_mask_ids"] == ["m1"]
+    assert summary["candidates"][0]["status"] == "pending"
+    with Image.open(messages[-1]["content"][1]["image"]) as board:
+        assert board.height > summary["image_height"] + 28
+    assert state["candidates"]["m1"]["status"] == "accepted"
+    assert state["inspection_ids"] == []
+
+
+def test_empty_segmentation_does_not_add_closeups(run_agent):
+    '''无 mask 时不生成虚假局部图，仍允许下一轮判断无目标。'''
+
+    result, _, _, request = run_agent(
+        [response(decision(text="fish")), response(decision(finish="no_target"))],
+        FakeBackend([None]),
+    )
+    assert result["status"] == "success"
+    summary = json.loads(request.calls[1][0][1]["content"][1]["text"])
+    assert summary["inspection_mask_ids"] == []
+    assert summary["candidates"] == []
+
+
 def test_review_and_next_batch_preserve_then_replace(run_agent):
     '''下一轮审核和新任务同时执行，替换旧结果时保留其他目标共享像素。'''
 

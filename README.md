@@ -120,8 +120,11 @@ The agent exposes one native tool, `advance_segmentation`. Each response can
 review existing masks and submit one text prompt plus up to four pixel-space
 `[x1, y1, x2, y2]` boxes. SAM tasks run sequentially on the same resident model;
 the next LLM request reviews all their results together. No inner LLM requests
-are made for individual masks. `inspect_mask_ids` prepares crops for the next
-main request.
+are made for individual masks. Every pending mask's close-up is automatically
+stitched into the same board as the segmentation results, so the next request
+can review both together without an inspection-only turn. `inspection_mask_ids`
+lists the supplied close-ups. Use `inspect_mask_ids` only for additional views
+of other candidates (up to four explicitly requested IDs).
 
 The develop branch contains only this workflow. The previous text-only agent
 remains on master; there is no mode switch. The seven standalone SAM adapters

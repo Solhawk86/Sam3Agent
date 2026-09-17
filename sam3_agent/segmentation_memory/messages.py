@@ -43,6 +43,7 @@ def memory_summary(memory: SegmentationMemory, remaining: int) -> dict[str, Any]
             for key, item in attempts.items()
         },
         "visible_mask_ids": memory.visible_ids,
+        "inspection_mask_ids": memory.inspection_ids,
         "tried_text_prompts": sorted(
             {
                 item.arguments["text_prompt"]
@@ -84,7 +85,12 @@ def build_messages(
                 "content": [
                     {
                         "type": "text",
-                        "text": "Current accepted/pending masks and requested inspection views. IDs are stable.",
+                        "text": (
+                            "Current accepted/pending masks, automatic close-up views "
+                            "for every pending mask, and requested inspection views. "
+                            "IDs are stable. Review the supplied close-ups directly; "
+                            "do not request the same views again."
+                        ),
                     },
                     {"type": "image", "image": board_path},
                 ],

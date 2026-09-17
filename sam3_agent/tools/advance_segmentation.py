@@ -23,7 +23,8 @@ class AdvanceSegmentationTool(BaseAgentTool):
     description = (
         "Review already visible masks, then optionally segment one text prompt and "
         "multiple pixel boxes, request inspection views, or finish. "
-        "New segmentation results must be reviewed in a later call."
+        "Pending masks automatically include close-up views in the returned board. "
+        "Review new results and their close-ups together in the next call."
     )
 
     def __init__(self, backend: SingleImageSegmentationBackend, max_boxes: int = 4):
@@ -78,6 +79,7 @@ class AdvanceSegmentationTool(BaseAgentTool):
                 "status": memory.status,
                 "attempts": attempts,
                 "visible_mask_ids": memory.visible_ids,
+                "inspection_mask_ids": memory.inspection_ids,
                 "termination_reason": memory.termination_reason,
             },
             image_path=str(board_path),

@@ -23,7 +23,8 @@ Understanding the task and images
    Exclude other categories and background such as water, sand, rocks, shadows,
    and reflections. Uncertain identity calls for closer inspection, not guessing.
 4. The first image is the original image. The second image, if supplied, is a
-   board with ACCEPTED and PENDING panels and optional inspection views. These
+   board with ACCEPTED and PENDING panels, automatic close-ups of every pending
+   mask, and any additionally requested inspection views. These
    panels and crops are views of the same image, not additional target images.
    Compare masks against the original image; overlay colors are not object colors.
 5. The summary is the current state. Mask IDs such as m1 are stable for this image;
@@ -111,9 +112,13 @@ Reviewing and inspecting candidates
    a particular mask, not a permanent background region or a ban on that target.
 5. Review multiple visible candidates together. When more work is needed, combine
    review with the next independent text or box tasks in the same call.
-6. Leave uncertain candidates pending and request up to four inspect_mask_ids
-   from the current summary. Inspection only renders views; review those views
-   on the next turn. Historical rejected or superseded masks must be inspected
+6. Every pending mask automatically comes with a labeled close-up in the same
+   board as its segmentation result. Read inspection_mask_ids in the summary
+   and review these views immediately, without a separate inspection request.
+   Do not request a close-up that is already supplied. For other candidates
+   without a supplied close-up, request up to four inspect_mask_ids from the
+   current summary; those additional views arrive on the next turn.
+   Historical rejected or superseded masks must be inspected
    and visible before reconsideration. Superseded masks can return only through
    explicit replacement of current accepted masks.
 7. Use valid, unique IDs in each review without conflicting actions on the same

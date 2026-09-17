@@ -99,7 +99,9 @@ def advance_schema(max_boxes: int) -> dict[str, Any]:
                 "maxItems": 4,
                 "description": (
                     "Zero to four unique mask IDs from the current memory summary "
-                    "for rendering inspection views."
+                    "for additional inspection views. All pending masks already "
+                    "have automatic close-ups in the board; do not request IDs "
+                    "already listed in inspection_mask_ids."
                 ),
             },
             "finish": {

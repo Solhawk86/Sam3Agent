@@ -4,6 +4,7 @@ import colorsys
 
 import numpy as np
 import pycocotools.mask as mask_utils
+import pytest
 from PIL import Image
 
 from sam3_agent.segmentation_memory import rendering
@@ -72,6 +73,42 @@ def test_render_board_adds_gutter_and_status_counts(tmp_path, monkeypatch):
     gutter = max(16, round(memory.width * 0.025))
     pixels = np.asarray(board)
 
-    assert titles == ["ACCEPTED (0)", "PENDING (1)"]
-    assert board.size == (memory.width * 2 + gutter, memory.height)
+    assert titles == ["ACCEPTED (0)", "PENDING (1)", "m1 / box / pending"]
+    assert board.size == (memory.width * 2 + gutter, memory.height * 2)
     assert np.all(pixels[:, memory.width : memory.width + gutter] == (72, 72, 72))
+
+
+@pytest.mark.parametrize("pending_count", [0, 1, 6])
+def test_board_automatically_includes_all_pending_crops(tmp_path, monkeypatch, pending_count):
+    '''自动局部图不受显式四项上限限制，合并历史检查时不重复绘制。'''
+
+    memory = make_memory(tmp_path)
+    mask = np.zeros((100, 100), dtype=np.uint8)
+    mask[20:80, 20:80] = 1
+    for index in range(1, pending_count + 3):
+        mask_id = f"m{index}"
+        status = "pending" if index <= pending_count else "rejected"
+        memory.candidates[mask_id] = Candidate(
+            mask_id, "t1", "text", encode_mask(mask), [], 0.9, 3600, status
+        )
+    rendered_ids = []
+
+    def fake_zoom(object_data, original, **kwargs):
+        '''记录真实传入的局部候选，并返回可定位的彩色面板。'''
+
+        rendered_ids.append(object_data["labels"][0]["noun_phrase"])
+        return Image.new("RGB", (100, 100), "red"), "#ff0000"
+
+    monkeypatch.setattr(rendering, "render_zoom_in", fake_zoom)
+    pending_ids = [f"m{index}" for index in range(1, pending_count + 1)]
+    historical_id = f"m{pending_count + 1}"
+    board = rendering.render_board(memory, pending_ids[:1] + [historical_id])
+
+    assert rendered_ids == pending_ids + [historical_id]
+    assert memory.inspection_ids == rendered_ids
+    assert memory.visible_ids == rendered_ids
+    assert board.getpixel((5, 170)) == (255, 0, 0)
+
+    rendering.render_board(memory, [])
+    assert memory.inspection_ids == pending_ids
+    assert memory.visible_ids == pending_ids

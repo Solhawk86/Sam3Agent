@@ -100,8 +100,12 @@ def render_candidates(
 
 
 def render_board(memory: SegmentationMemory, inspect_ids: list[str]) -> Image.Image:
-    '''合成全部有效和待审核候选，以及最多四个局部检查面板。'''
+    '''自动拼接全部待审核候选的局部图，并合并显式检查请求。'''
 
+    pending_ids = [
+        item.mask_id for item in memory.candidates.values() if item.status == "pending"
+    ]
+    inspection_ids = list(dict.fromkeys(pending_ids + inspect_ids))
     panels = []
     visible_ids = []
     for status in ("accepted", "pending"):
@@ -116,7 +120,7 @@ def render_board(memory: SegmentationMemory, inspect_ids: list[str]) -> Image.Im
             )
         )
     with Image.open(memory.image_path) as original:
-        for mask_id in inspect_ids:
+        for mask_id in inspection_ids:
             candidate = memory.candidates[mask_id]
             if candidate.area:
                 crop, _ = render_zoom_in(
@@ -159,4 +163,5 @@ def render_board(memory: SegmentationMemory, inspect_ids: list[str]) -> Image.Im
             board.paste(panel, (x, y))
         y += height
     memory.visible_ids = visible_ids
+    memory.inspection_ids = inspection_ids
     return board

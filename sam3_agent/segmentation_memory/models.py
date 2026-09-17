@@ -82,6 +82,7 @@ class SegmentationMemory:
     review_history: list[dict[str, Any]] = field(default_factory=list)
     notable_events: list[dict[str, Any]] = field(default_factory=list)
     visible_ids: list[str] = field(default_factory=list)
+    inspection_ids: list[str] = field(default_factory=list)
     presented_ids: list[str] = field(default_factory=list)
     statistics: RunStatistics = field(default_factory=RunStatistics)
     round_number: int = 0
