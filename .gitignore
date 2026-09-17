@@ -12,3 +12,4 @@ agent_output/
 *.safetensors
 result
 docs
+agent_config.yaml
