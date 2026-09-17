@@ -36,3 +36,18 @@ def test_all_schema_objects_require_exact_fields():
             inspect(schema["items"])
 
     inspect(AdvanceSegmentationTool(object()).parameters_schema)
+
+
+def test_advance_schema_describes_all_decision_parameters():
+    '''工具定义为顶层及审核参数提供作用和约束描述。'''
+
+    properties = AdvanceSegmentationTool(object()).parameters_schema["properties"]
+    assert all(properties[name].get("description") for name in properties)
+    review_properties = properties["review"]["properties"]
+    assert all(review_properties[name].get("description") for name in review_properties)
+    replacement = review_properties["replace"]["items"]
+    assert replacement["description"]
+    assert all(
+        replacement["properties"][name].get("description")
+        for name in replacement["properties"]
+    )
