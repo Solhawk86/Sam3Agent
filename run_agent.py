@@ -25,6 +25,11 @@ def build_parser():
     parser.add_argument("--image-list")
     parser.add_argument("--output-dir")
     parser.add_argument("--final-mask-dir")
+    parser.add_argument("--summary-path")
+    parser.add_argument(
+        "--gpu",
+        help="Override environment.CUDA_VISIBLE_DEVICES for this worker.",
+    )
     parser.add_argument("--pattern")
     parser.add_argument("--start-index", type=int)
     parser.add_argument("--limit", type=int)
@@ -39,6 +44,11 @@ def main(argv=None):
     """读取配置并调用批量 runner。"""
     args = build_parser().parse_args(argv)
     raw_config, config_path = load_config(args.config, ENTRY_ROOT)
+    if args.gpu is not None:
+        environment = raw_config.setdefault("environment", {})
+        if not isinstance(environment, dict):
+            raise ValueError("environment must be a mapping when --gpu is used")
+        environment["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     apply_environment(raw_config.get("environment", {}))
     config = build_run_config(raw_config, config_path, WORKSPACE_ROOT, args=args)
     configure_sam3_import(config.runtime)

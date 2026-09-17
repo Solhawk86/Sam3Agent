@@ -111,6 +111,10 @@ def build_run_config(
                 cli_or_config(args, output_config, "final_mask_dir"),
                 workspace_root,
             ),
+            summary_path=resolve_path(
+                cli_or_config(args, output_config, "summary_path"),
+                workspace_root,
+            ),
         ),
         prompt=PromptConfig(
             regex=prompt_config.get("regex", r"([A-Za-z_]+?)(\d+)$"),

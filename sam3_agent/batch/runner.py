@@ -43,7 +43,9 @@ def run_batch(config: RunConfig) -> None:
     config.output.output_dir.mkdir(parents=True, exist_ok=True)
     if config.output.final_mask_dir is not None:
         config.output.final_mask_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = build_summary_path(config.output.output_dir)
+    summary_path = config.output.summary_path or build_summary_path(
+        config.output.output_dir
+    )
 
     total = len(image_paths)
     print(f"Loaded agent config: {config.config_path}", flush=True)

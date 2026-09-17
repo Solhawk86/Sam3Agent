@@ -47,6 +47,7 @@ class OutputConfig:
 
     output_dir: Path
     final_mask_dir: Optional[Path]
+    summary_path: Optional[Path]
 
 
 @dataclass(frozen=True)

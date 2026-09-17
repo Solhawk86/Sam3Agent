@@ -1,6 +1,7 @@
 '''配置、模型准备和批量结果统计的集成契约。'''
 
 import json
+import os
 from argparse import Namespace
 from pathlib import Path
 
@@ -56,6 +57,44 @@ def test_yaml_and_cli_pass_box_limit(tmp_path):
     assert config.agent.max_box_tasks_per_round == 7
     assert config_for(tmp_path).agent.max_box_tasks_per_round == 4
     assert "mode" not in vars(config.agent)
+
+
+def test_batch_cli_overrides_gpu_and_summary_path(tmp_path, monkeypatch):
+    '''多进程入口可覆盖 YAML GPU，并给各 worker 指定独立摘要。'''
+
+    submitted = []
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "original")
+    monkeypatch.setattr(run_agent, "run_batch", submitted.append)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+environment:
+  CUDA_VISIBLE_DEVICES: "3"
+input:
+  image_dir: .
+output:
+  output_dir: output
+llm:
+  model: fake
+  base_url: http://localhost
+  api_key: test
+"""
+    )
+    summary_path = tmp_path / "gpu2-summary.json"
+    run_agent.main(
+        [
+            "--config",
+            str(config_path),
+            "--gpu",
+            "2",
+            "--summary-path",
+            str(summary_path),
+            "--limit",
+            "0",
+        ]
+    )
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "2"
+    assert submitted[0].output.summary_path == summary_path
 
 
 @pytest.mark.parametrize(
