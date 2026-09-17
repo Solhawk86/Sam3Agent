@@ -117,6 +117,7 @@ def build_run_config(
             replacement=prompt_config.get("replacement", r"\1"),
             underscore_replacement=prompt_config.get("underscore_replacement", ""),
             require_match=prompt_config.get("require_match", True),
+            normalize_class_name=prompt_config.get("normalize_class_name", False),
         ),
         agent=AgentConfig(
             max_generations=cli_or_config(args, agent_config, "max_generations", 20),

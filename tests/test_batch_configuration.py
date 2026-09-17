@@ -15,7 +15,7 @@ from sam3_agent.config.schema import AgentConfig
 from sam3_agent.tools import Sam3Tool
 
 
-def config_for(tmp_path, args=None, agent=None):
+def config_for(tmp_path, args=None, agent=None, prompt=None):
     '''创建不含真实凭据且不访问服务的测试配置。'''
 
     return build_run_config(
@@ -23,12 +23,27 @@ def config_for(tmp_path, args=None, agent=None):
             "input": {"image_dir": str(tmp_path)},
             "output": {"output_dir": str(tmp_path / "output")},
             "agent": agent or {},
+            "prompt": prompt or {},
             "llm": {"model": "fake", "base_url": "http://localhost", "api_key": "test"},
         },
         tmp_path / "config.yaml",
         tmp_path,
         args,
     )
+
+
+@pytest.mark.parametrize(
+    "prompt,expected",
+    [
+        ({}, False),
+        ({"normalize_class_name": False}, False),
+        ({"normalize_class_name": True}, True),
+    ],
+)
+def test_prompt_normalization_config_defaults_and_override(tmp_path, prompt, expected):
+    '''配置工厂保留默认关闭及显式开关设置。'''
+
+    assert config_for(tmp_path, prompt=prompt).prompt.normalize_class_name is expected
 
 
 def test_yaml_and_cli_pass_box_limit(tmp_path):

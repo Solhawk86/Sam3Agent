@@ -7,9 +7,16 @@ from pathlib import Path
 import numpy as np
 import pycocotools.mask as mask_utils
 import pytest
+import yaml
 from PIL import Image
 
-from sam3_agent.inference import _build_union_binary_mask, run_single_image_inference
+from sam3_agent.batch import runner as batch_runner
+from sam3_agent.config.factory import build_run_config
+from sam3_agent.inference import (
+    _build_union_binary_mask,
+    get_result_dir,
+    run_single_image_inference,
+)
 from sam3_agent.llm_client import FunctionToolCall, LLMResponse
 from sam3_agent.tools.protocol import SegmentationResult
 
@@ -161,6 +168,56 @@ def run_agent(tmp_path):
         return result, state, backend, request
 
     return run
+
+
+def test_batch_supplies_clean_initial_category_to_agent(tmp_path, monkeypatch):
+    '''完整批处理通过假后端验证首次模型输入及分割请求均使用后端类别词。'''
+
+    image_path = tmp_path / "MAS_MarineFish_GhostPipeFish_Cam_1.jpg"
+    Image.new("RGB", (12, 10), "gray").save(image_path)
+    config_path = Path(__file__).parents[1] / "agent_config.yaml"
+    config = build_run_config(
+        {
+            "input": {"image_dir": str(tmp_path)},
+            "output": {"output_dir": str(tmp_path / "output")},
+            "prompt": yaml.safe_load(config_path.read_text())["prompt"],
+            "agent": {"max_generations": 2},
+        },
+        config_path,
+        tmp_path,
+    )
+    backend = FakeBackend()
+    request = FakeRequest(
+        [
+            response(decision(text="ghost pipe fish"), "first"),
+            response(decision(accept=["m1"], finish="complete"), "last"),
+        ],
+        backend,
+    )
+
+    def build_fake_runner(config, verbose=False):
+        '''复用真实单图入口，只替换模型和服务依赖。'''
+
+        return (
+            {"name": "fake"},
+            request,
+            backend,
+            get_result_dir,
+            run_single_image_inference,
+        )
+
+    monkeypatch.setattr(batch_runner, "build_runner", build_fake_runner)
+    batch_runner.run_batch(config)
+
+    assert len(request.calls) == 2
+    for messages, _ in request.calls:
+        summary = json.loads(messages[1]["content"][1]["text"])
+        assert summary["query"] == "ghost pipe fish"
+    assert [call[:2] for call in backend.calls] == [("text", "ghost pipe fish")]
+    result_dir = Path(get_result_dir(str(config.output.output_dir), str(image_path)))
+    prediction = json.loads((result_dir / "pred.json").read_text())
+    assert prediction["text_prompt"] == "ghost pipe fish"
+    assert prediction["status"] == "success"
 
 
 def test_text_and_three_boxes_finish_in_two_requests(run_agent):

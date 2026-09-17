@@ -57,6 +57,7 @@ class PromptConfig:
     replacement: str
     underscore_replacement: str
     require_match: bool
+    normalize_class_name: bool = False
 
 
 def validate_agent_limits(max_generations: int, max_boxes: int) -> None:
