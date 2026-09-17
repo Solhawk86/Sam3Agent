@@ -120,11 +120,28 @@ The agent exposes one native tool, `advance_segmentation`. Each response can
 review existing masks and submit one text prompt plus up to four pixel-space
 `[x1, y1, x2, y2]` boxes. SAM tasks run sequentially on the same resident model;
 the next LLM request reviews all their results together. No inner LLM requests
-are made for individual masks. Every pending mask's close-up is automatically
-stitched into the same board as the segmentation results, so the next request
-can review both together without an inspection-only turn. `inspection_mask_ids`
+are made for individual masks. The first request contains only the original image.
+Later requests contain the original, one overview (longest edge at most 1280),
+and numbered 2x2 close-up pages with up to four candidates each. All pages are
+sent together in one LLM request, without an inspection-only turn. Explicitly
+requested candidates come first; remaining pending IDs follow in numeric order.
+Only the latest overview and pages are included. `inspection_mask_ids`
 lists the supplied close-ups. Use `inspect_mask_ids` only for additional views
 of other candidates (up to four explicitly requested IDs).
+
+Each candidate retains the existing original-crop/mask-overlay composite. Only
+composites whose longest edge is below 512 are enlarged proportionally to 512
+using LANCZOS; all others keep their pixel dimensions, including narrow crops
+with one edge below 512. Page columns and rows adapt to these sizes, with white
+padding and empty slots on the final page. Captions identify mask ID, branch,
+status, and score. Pages are never resized after composition, so their dimensions
+and total pixel counts vary. For N close-ups, later requests contain
+`2 + ceil(N / 4)` images (13 close-ups produce 6 images). All box coordinates
+continue to refer to original image pixels.
+
+Round images are saved as `round_XXX_overview.png` and
+`round_XXX_closeups_001.png`, etc.; round request JSON records the actual paths.
+Historical run artifacts are left unchanged.
 
 The develop branch contains only this workflow. The previous text-only agent
 remains on master; there is no mode switch. The seven standalone SAM adapters
@@ -175,7 +192,7 @@ requires none. A failed SAM attempt does not establish absence.
 
 Each image writes a current `memory/state.json` and an append-only
 `memory/events.jsonl`. Full per-run artifacts live under `memory/runs/<run_id>/`:
-state, events, attempts, raw LLM responses, round input JSON and labeled boards.
+state, events, attempts, raw LLM responses, round input JSON and labeled overviews/close-up pages.
 Retrying an incomplete image preserves its previous run. This is an audit trail,
 not automatic checkpoint recovery.
 

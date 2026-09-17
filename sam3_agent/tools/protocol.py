@@ -119,6 +119,7 @@ class ToolResult:
     image_path: Optional[str] = None
     terminal: bool = False
     success: bool = True
+    image_paths: list[str] | None = None
 
     def as_tool_content(self) -> str:
         '''把结构化工具结果序列化成原生 tool 消息内容。'''

@@ -47,68 +47,148 @@ def test_render_candidates_uses_light_fill_and_strong_outline(tmp_path):
     assert boundary.max() > interior.max() * 3
 
 
-def test_render_board_adds_gutter_and_status_counts(tmp_path, monkeypatch):
-    '''双列拼板使用显式分隔带，并在状态标题中保留候选数量。'''
+@pytest.mark.parametrize(
+    "size,expected",
+    [
+        ((200, 400), (256, 512)), ((400, 200), (512, 256)),
+        ((256, 512), (256, 512)), ((512, 256), (512, 256)),
+        ((512, 512), (512, 512)), ((300, 900), (300, 900)),
+        ((900, 300), (900, 300)), ((600, 800), (600, 800)),
+        ((1, 400), (1, 512)), ((333, 400), (426, 512)),
+    ],
+)
+def test_closeup_resize_preserves_large_images(size, expected):
+    '''小图按最长边放大，边界和大图逐像素保留。'''
 
-    memory = make_memory(tmp_path, width=80, height=40)
-    memory.candidates["m1"] = Candidate(
-        "m1", "t1", "box", "unused", [], 0.9, 0, "pending"
-    )
-    titles = []
-
-    def fake_render_candidates(_memory, _candidates):
-        '''返回固定尺寸面板，避免测试依赖候选 RLE。'''
-
-        return Image.new("RGB", (80, 40), "white")
-
-    def fake_caption(image, title):
-        '''记录标题并保持面板尺寸不变。'''
-
-        titles.append(title)
-        return image
-
-    monkeypatch.setattr(rendering, "render_candidates", fake_render_candidates)
-    monkeypatch.setattr(rendering, "_caption", fake_caption)
-    board = rendering.render_board(memory, [])
-    gutter = max(16, round(memory.width * 0.025))
-    pixels = np.asarray(board)
-
-    assert titles == ["ACCEPTED (0)", "PENDING (1)", "m1 / box / pending"]
-    assert board.size == (memory.width * 2 + gutter, memory.height * 2)
-    assert np.all(pixels[:, memory.width : memory.width + gutter] == (72, 72, 72))
+    pixels = np.random.default_rng(7).integers(0, 256, (size[1], size[0], 3), dtype=np.uint8)
+    image = Image.fromarray(pixels)
+    resized = rendering._resize_closeup(image)
+    assert resized.size == expected
+    if max(size) >= 512:
+        np.testing.assert_array_equal(np.asarray(resized), pixels)
+    else:
+        np.testing.assert_array_equal(
+            np.asarray(resized), np.asarray(image.resize(expected, Image.Resampling.LANCZOS))
+        )
 
 
-@pytest.mark.parametrize("pending_count", [0, 1, 6])
-def test_board_automatically_includes_all_pending_crops(tmp_path, monkeypatch, pending_count):
-    '''自动局部图不受显式四项上限限制，合并历史检查时不重复绘制。'''
+@pytest.mark.parametrize("pending_count", [0, 1, 4, 5, 13])
+def test_pages_include_pending_and_prioritize_inspections(tmp_path, monkeypatch, pending_count):
+    '''显式检查先于数字排序的待审核项，分页和可见状态不会累积。'''
 
     memory = make_memory(tmp_path)
-    mask = np.zeros((100, 100), dtype=np.uint8)
-    mask[20:80, 20:80] = 1
-    for index in range(1, pending_count + 3):
-        mask_id = f"m{index}"
-        status = "pending" if index <= pending_count else "rejected"
-        memory.candidates[mask_id] = Candidate(
-            mask_id, "t1", "text", encode_mask(mask), [], 0.9, 3600, status
+    # 逆序插入以验证排序不依赖字典或字符串顺序。
+    for index in range(pending_count, 0, -1):
+        memory.candidates[f"m{index}"] = Candidate(
+            f"m{index}", "t1", "text", "unused", [], 0.9, 1
         )
-    rendered_ids = []
+    memory.candidates["m99"] = Candidate("m99", "t1", "box", "unused", [], 0.8, 1, "rejected")
+    memory.candidates["m100"] = Candidate("m100", "t1", "box", "unused", [], 0.7, 1, "accepted")
+    rendered_ids, titles = [], []
+    original_caption = rendering._caption
 
     def fake_zoom(object_data, original, **kwargs):
-        '''记录真实传入的局部候选，并返回可定位的彩色面板。'''
+        '''记录局部图的真实渲染顺序。'''
 
         rendered_ids.append(object_data["labels"][0]["noun_phrase"])
         return Image.new("RGB", (100, 100), "red"), "#ff0000"
 
+    def capture_caption(image, title):
+        '''记录页面和候选标题，同时使用真实标题排版。'''
+
+        titles.append(title)
+        return original_caption(image, title)
+
     monkeypatch.setattr(rendering, "render_zoom_in", fake_zoom)
+    monkeypatch.setattr(rendering, "_caption", capture_caption)
     pending_ids = [f"m{index}" for index in range(1, pending_count + 1)]
-    historical_id = f"m{pending_count + 1}"
-    board = rendering.render_board(memory, pending_ids[:1] + [historical_id])
+    requested = ["m99"] + pending_ids[-1:]
+    expected = list(dict.fromkeys(requested + pending_ids))
+    pages = rendering.render_closeup_pages(memory, requested + requested)
+    assert rendered_ids == expected == memory.inspection_ids
+    assert set(memory.visible_ids) == set(expected) | {"m100"}
+    assert len(pages) == (len(expected) + 3) // 4
+    for index in range(len(pages)):
+        assert f"Page {index + 1}/{len(pages)}: {', '.join(expected[index * 4:index * 4 + 4])}" in titles
+    assert "m99 / box / rejected / score=0.800" in titles
 
-    assert rendered_ids == pending_ids + [historical_id]
-    assert memory.inspection_ids == rendered_ids
-    assert memory.visible_ids == rendered_ids
-    assert board.getpixel((5, 170)) == (255, 0, 0)
-
-    rendering.render_board(memory, [])
+    pages = rendering.render_closeup_pages(memory, [])
     assert memory.inspection_ids == pending_ids
-    assert memory.visible_ids == pending_ids
+    assert set(memory.visible_ids) == set(pending_ids) | {"m100"}
+    assert len(pages) == (pending_count + 3) // 4
+    if pending_count % 4:
+        assert pages[-1].getpixel((pages[-1].width - 1, pages[-1].height - 1)) == (255, 255, 255)
+
+
+def test_page_preserves_mixed_size_pixels_and_empty_slot():
+    '''大图在四宫格内不裁切不缩放，狭长图居中且末格留白。'''
+
+    sizes = [(600, 800), (300, 900), (900, 300)]
+    colors = [(210, 10, 20), (10, 210, 20), (10, 20, 210)]
+    crops = [Image.new("RGB", size, color) for size, color in zip(sizes, colors)]
+    page = rendering._closeup_page(crops, ["m1", "m2", "m3"], "Page 1/1: m1, m2, m3")
+    pixels = np.asarray(page)
+    # 每张图的纯色像素包围盒等于其原始尺寸，不会受标题和留白影响。
+    positions = []
+    for (width, height), color in zip(sizes, colors):
+        rows, columns = np.nonzero(np.all(pixels == color, axis=2))
+        assert len(rows) == width * height
+        assert columns.max() - columns.min() + 1 == width
+        assert rows.max() - rows.min() + 1 == height
+        positions.append((columns.min(), rows.min()))
+    assert positions[0][0] < positions[1][0]
+    assert positions[0][1] < positions[2][1]
+    assert page.getpixel((page.width - 100, page.height - 100)) == (255, 255, 255)
+    assert page.width == 900 + 16 + 512
+
+
+def test_caption_wraps_without_touching_image():
+    '''长标题换行后仍完整保留底部图像。'''
+
+    image = Image.new("RGB", (512, 80), "red")
+    short = rendering._caption(image, "short")
+    long = rendering._caption(image, "mask_id / branch / status / score " * 12)
+    assert long.height > short.height
+    np.testing.assert_array_equal(np.asarray(long)[-80:], np.asarray(image))
+    assert long.width == image.width
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1600, 900), (900, 1600)])
+def test_overview_counts_and_size_limit(tmp_path, monkeypatch, size):
+    '''概览包含状态计数且完整画布长边不超过上限。'''
+
+    memory = make_memory(tmp_path, *size)
+    mask = np.zeros((size[1], size[0]), dtype=np.uint8)
+    mask[50:150, 50:150] = 1
+    for index, status in enumerate(["accepted", "pending", "rejected"], 1):
+        memory.candidates[f"m{index}"] = Candidate(
+            f"m{index}", "t1", "text", encode_mask(mask), [], 0.9, 10000, status
+        )
+    titles = []
+    original_caption = rendering._caption
+
+    def capture_caption(image, title):
+        '''记录概览计数并保留实际排版。'''
+
+        titles.append(title)
+        return original_caption(image, title)
+
+    monkeypatch.setattr(rendering, "_caption", capture_caption)
+    overview = rendering.render_overview(memory)
+    assert max(overview.size) <= 1280
+    assert titles == ["ACCEPTED (1) / PENDING (1)"]
+    if size == (800, 600):
+        assert overview.width == 800
+        assert overview.getpixel((125, overview.height - 600 + 125)) == (0, 0, 0)
+
+
+def test_zero_area_closeup_uses_original(tmp_path):
+    '''零面积候选仍可使用原图生成审核分页。'''
+
+    memory = make_memory(tmp_path, 600, 800)
+    memory.candidates["m1"] = Candidate("m1", "t1", "box", "unused", [], 0.0, 0)
+    pages = rendering.render_closeup_pages(memory, [])
+    pixels = np.asarray(pages[0])
+    # 标题也有黑色像素，完整原图区域应至少保留原像素数量。
+    assert np.count_nonzero(np.all(pixels == (0, 0, 0), axis=2)) >= 600 * 800
+    assert memory.inspection_ids == ["m1"]

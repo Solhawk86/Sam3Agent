@@ -5,6 +5,7 @@ from dataclasses import asdict
 from typing import Any
 
 from .models import SegmentationMemory
+from .rendering import CLOSEUPS_PER_PAGE
 
 
 def memory_summary(memory: SegmentationMemory, remaining: int) -> dict[str, Any]:
@@ -62,9 +63,9 @@ def build_messages(
     memory: SegmentationMemory,
     remaining: int,
     latest_pair: list[dict[str, Any]],
-    board_path: str | None,
+    board_paths: list[str] | None,
 ) -> list[dict[str, Any]]:
-    '''只保留原图、状态摘要、最近完整调用配对及当前汇总图。'''
+    '''只保留原图、状态摘要、最近完整调用配对及当前概览和分页。'''
 
     summary = memory_summary(memory, remaining)
     messages = [
@@ -78,22 +79,32 @@ def build_messages(
         },
         *latest_pair,
     ]
-    if board_path is not None:
-        messages.append(
+    if board_paths:
+        content = [
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "Current accepted/pending masks, automatic close-up views "
-                            "for every pending mask, and requested inspection views. "
-                            "IDs are stable. Review the supplied close-ups directly; "
-                            "do not request the same views again."
-                        ),
-                    },
-                    {"type": "image", "image": board_path},
-                ],
-            }
-        )
+                "type": "text",
+                "text": (
+                    "Current overview of accepted/pending masks, followed by "
+                    "automatic close-up pages for every pending mask and requested "
+                    "inspection views. All images belong to this single request. "
+                    "IDs are stable. Review all supplied pages directly; do not "
+                    "request the same views again. Use original image pixels for boxes."
+                ),
+            },
+            {"type": "image", "image": board_paths[0]},
+        ]
+        for index, path in enumerate(board_paths[1:]):
+            start = index * CLOSEUPS_PER_PAGE
+            ids = memory.inspection_ids[start:start + CLOSEUPS_PER_PAGE]
+            content.extend([
+                {
+                    "type": "text",
+                    "text": (
+                        f"Close-ups Page {index + 1}/{len(board_paths) - 1}: "
+                        f"{', '.join(ids)}. Read left-to-right, top-to-bottom."
+                    ),
+                },
+                {"type": "image", "image": path},
+            ])
+        messages.append({"role": "user", "content": content})
     return messages

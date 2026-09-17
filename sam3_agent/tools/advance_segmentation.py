@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 from ..segmentation_memory.decision import validate_decision
 from ..segmentation_memory.execution import execute_tasks
-from ..segmentation_memory.rendering import render_board
+from ..segmentation_memory.rendering import render_closeup_pages, render_overview
 from ..segmentation_memory.review import apply_review
 from ..segmentation_memory.schema import advance_schema
 from .protocol import (
@@ -23,7 +23,8 @@ class AdvanceSegmentationTool(BaseAgentTool):
     description = (
         "Review already visible masks, then optionally segment one text prompt and "
         "multiple pixel boxes, request inspection views, or finish. "
-        "Pending masks automatically include close-up views in the returned board. "
+        "Results include an overview and 2x2 close-up pages for all pending masks "
+        "in the same LLM request. "
         "Review new results and their close-ups together in the next call."
     )
 
@@ -63,9 +64,16 @@ class AdvanceSegmentationTool(BaseAgentTool):
                 memory.termination_reason = "backend_error"
 
         start = time.perf_counter()
-        board = render_board(memory, decision.inspect_ids)
-        board_path = session.rounds_dir / f"round_{memory.round_number:03d}.png"
-        board.save(board_path)
+        overview = render_overview(memory)
+        pages = render_closeup_pages(memory, decision.inspect_ids)
+        prefix = f"round_{memory.round_number:03d}"
+        overview_path = session.rounds_dir / f"{prefix}_overview.png"
+        overview.save(overview_path)
+        image_paths = [str(overview_path)]
+        for index, page in enumerate(pages, 1):
+            path = session.rounds_dir / f"{prefix}_closeups_{index:03d}.png"
+            page.save(path)
+            image_paths.append(str(path))
         memory.statistics.render_seconds += time.perf_counter() - start
         session.save_event(
             "batch_completed",
@@ -82,7 +90,8 @@ class AdvanceSegmentationTool(BaseAgentTool):
                 "inspection_mask_ids": memory.inspection_ids,
                 "termination_reason": memory.termination_reason,
             },
-            image_path=str(board_path),
+            image_path=str(overview_path),
             terminal=memory.status != "running",
             success=memory.status != "partial",
+            image_paths=image_paths,
         )

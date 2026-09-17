@@ -89,7 +89,7 @@ class FakeBackend:
         outcome = self.outcomes.pop(0) if self.outcomes else rectangle()
         if isinstance(outcome, Exception):
             raise outcome
-        masks = [] if outcome is None else [outcome]
+        masks = [] if outcome is None else (outcome if isinstance(outcome, list) else [outcome])
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         encoded = [
@@ -242,7 +242,7 @@ def test_text_and_three_boxes_finish_in_two_requests(run_agent):
     assert len(state["candidates"]) == 4
     assert len({item["rle"] for item in state["candidates"].values()}) == 1
     assert len({call[2] for call in backend.calls}) == 4
-    for messages, options in request.calls:
+    for round_index, (messages, options) in enumerate(request.calls):
         assert [item["function"]["name"] for item in options["tools"]] == [
             "advance_segmentation"
         ]
@@ -254,7 +254,7 @@ def test_text_and_three_boxes_finish_in_two_requests(run_agent):
                 for part in (message.get("content") or [])
                 if isinstance(part, dict)
             )
-            <= 2
+            == (1 if round_index == 0 else 3)
         )
     assert Path(result["final_mask_path"]).is_file()
     assert set(np.asarray(Image.open(result["final_mask_path"])).ravel()) == {0, 255}
@@ -282,8 +282,10 @@ def test_masks_and_closeups_arrive_together_without_inspection_turn(run_agent, b
     assert summary["inspection_mask_ids"] == ["m1"]
     assert tool_result["inspection_mask_ids"] == ["m1"]
     assert summary["candidates"][0]["status"] == "pending"
-    with Image.open(messages[-1]["content"][1]["image"]) as board:
-        assert board.height > summary["image_height"] + 28
+    assert len(image_paths(messages)) == 3
+    assert "m1" in messages[-1]["content"][2]["text"]
+    with Image.open(messages[-1]["content"][3]["image"]) as page:
+        assert page.width >= 1024 and page.height >= 1024
     assert state["candidates"]["m1"]["status"] == "accepted"
     assert state["inspection_ids"] == []
 
@@ -527,3 +529,90 @@ def test_startup_failure_never_calls_llm(run_agent):
 
     with pytest.raises(RuntimeError, match="missing checkpoint"):
         run_agent([], BrokenBackend())
+
+
+def image_paths(messages):
+    '''按发送顺序提取请求里的全部图片路径。'''
+
+    return [
+        part["image"] for message in messages
+        for part in (message.get("content") or [])
+        if isinstance(part, dict) and part.get("type") == "image"
+    ]
+
+
+@pytest.mark.parametrize("count", [0, 1, 4, 5, 13])
+def test_all_pages_arrive_in_one_review_request(run_agent, count):
+    '''多个候选分页仍只需一次分割请求和一次审核请求。'''
+
+    ids = [f"m{index}" for index in range(1, count + 1)]
+    result, _, _, request = run_agent(
+        [
+            response(decision(text="fish"), "segment"),
+            response(decision(accept=ids, finish="complete" if count else "no_target"), "review"),
+        ],
+        FakeBackend([[rectangle() for _ in ids]]),
+    )
+    assert result["status"] == "success"
+    assert len(request.calls) == result["statistics"]["llm_requests"] == 2
+    assert len(image_paths(request.calls[0][0])) == 1
+    paths = image_paths(request.calls[1][0])
+    assert len(paths) == 2 + (count + 3) // 4
+    assert Path(paths[1]).name == "round_001_overview.png"
+    assert [Path(path).name for path in paths[2:]] == [
+        f"round_001_closeups_{index:03d}.png" for index in range(1, (count + 3) // 4 + 1)
+    ]
+    assert all(Path(path).is_file() for path in paths)
+    saved = json.loads((Path(result["run_dir"]) / "rounds" / "round_002.json").read_text())
+    assert image_paths(saved) == paths
+    assert not (Path(result["run_dir"]) / "rounds" / "round_001.png").exists()
+    assert request.calls[1][0][2]["tool_calls"][0]["id"] == request.calls[1][0][3]["tool_call_id"]
+
+
+def test_page_groups_replace_and_survive_invalid_decision(run_agent):
+    '''分页整体更新，无效审核保留整组图片，审核完成后旧页全部退出请求。'''
+
+    ids = [f"m{index}" for index in range(1, 6)]
+    result, _, _, request = run_agent(
+        [
+            response(decision(text="fish"), "segment"),
+            response(decision(accept=ids[:4]), "partial_review"),
+            response(decision(accept=["m999"]), "invalid"),
+            response(decision(accept=ids[4:]), "review"),
+            response(decision(finish="complete"), "finish"),
+        ],
+        FakeBackend([[rectangle() for _ in ids]]),
+    )
+    assert result["status"] == "success"
+    groups = [image_paths(messages) for messages, _ in request.calls]
+    assert [len(group) for group in groups] == [1, 4, 3, 3, 2]
+    assert groups[2] == groups[3]
+    assert set(groups[1][1:]).isdisjoint(groups[2][1:])
+    assert Path(groups[4][1]).name == "round_004_overview.png"
+    assert "invalid_decision" in request.calls[3][0][3]["content"]
+    assert json.loads(request.calls[3][0][1]["content"][1]["text"])["inspection_mask_ids"] == ["m5"]
+    for messages, _ in request.calls[1:]:
+        assert messages[2]["tool_calls"][0]["id"] == messages[3]["tool_call_id"]
+
+
+def test_runner_accepts_legacy_single_image_tool_result(run_agent, monkeypatch):
+    '''仅返回旧单图字段的工具仍能反馈一张图片且保持位置参数兼容。'''
+
+    from sam3_agent.tools.advance_segmentation import AdvanceSegmentationTool
+    from sam3_agent.tools.protocol import ToolResult
+
+    original = AdvanceSegmentationTool.execute
+
+    def legacy_execute(self, context, arguments):
+        '''模拟没有多图字段的旧工具输出。'''
+
+        result = original(self, context, arguments)
+        return ToolResult(result.content, result.image_path, result.terminal, result.success)
+
+    monkeypatch.setattr(AdvanceSegmentationTool, "execute", legacy_execute)
+    result, _, _, request = run_agent([
+        response(decision(text="fish")),
+        response(decision(accept=["m1"], finish="complete")),
+    ])
+    assert result["status"] == "success"
+    assert len(image_paths(request.calls[1][0])) == 2

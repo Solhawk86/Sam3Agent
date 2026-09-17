@@ -147,9 +147,9 @@ def run_memory_agent(
     prompt_path = Path(__file__).parents[1] / "system_prompts" / "system_prompt.txt"
     system_prompt = prompt_path.read_text(encoding="utf-8")
     latest_pair = []
-    board_path = None
+    board_paths: list[str] = []
     messages = build_messages(
-        system_prompt, memory, max_generations, latest_pair, board_path
+        system_prompt, memory, max_generations, latest_pair, board_paths
     )
     try:
         for round_number in range(1, max_generations + 1):
@@ -158,7 +158,7 @@ def run_memory_agent(
                 memory,
                 max_generations - round_number + 1,
                 latest_pair,
-                board_path,
+                board_paths,
             )
             memory.round_number = round_number
             session.save_round(messages)
@@ -179,8 +179,10 @@ def run_memory_agent(
                     "content": result.as_tool_content(),
                 },
             ]
-            if result.image_path is not None:
-                board_path = result.image_path
+            if result.image_paths is not None:
+                board_paths = list(result.image_paths)
+            elif result.image_path is not None:
+                board_paths = [result.image_path]
             if not result.success:
                 session.save_event("decision_feedback", result.content)
             if debug:
@@ -209,7 +211,7 @@ def run_memory_agent(
         memory,
         max_generations - memory.statistics.llm_requests,
         latest_pair,
-        board_path,
+        board_paths,
     )
     memory.statistics.total_seconds = time.perf_counter() - start
     session.save_event(
