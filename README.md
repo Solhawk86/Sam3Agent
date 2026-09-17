@@ -1,7 +1,7 @@
 # SAM3 Agent
 
-An independent visual grounding agent that uses an externally installed SAM3
-image model as an in-process segmentation tool.
+An instance-segmentation agent that finds all visible instances of a target
+category using an externally installed SAM3 image model as an in-process tool.
 
 ## Install
 
@@ -32,7 +32,7 @@ Then run one image:
 ```bash
 python -m sam3_agent.cli \
   --image image.jpg \
-  --prompt "the person on the left" \
+  --prompt "fish" \
   --output-dir outputs \
   --sam3-checkpoint /path/to/checkpoint.pt
 ```
@@ -61,7 +61,7 @@ request = partial(
 )
 result = run_single_image_inference(
     image_path="image.jpg",
-    text_prompt="the person on the left",
+    text_prompt="fish",
     llm_config={"name": "vision-model"},
     send_generate_request=request,
     segmentation_tool=sam_tool,
@@ -82,6 +82,37 @@ extra_body:
   chat_template_kwargs:
     enable_thinking: false
 ```
+
+## Initial category prompts
+
+The backend provides the initial category phrase before the first LLM request.
+The model uses that phrase for its first text segmentation request. It can then
+try synonyms, common names, or broader categories to improve coverage, while
+always accepting only instances of the initial target category.
+
+The MAS3K batch configuration extracts the specific category from each filename:
+
+```yaml
+prompt:
+  regex: '^MAS_[^_]+_([^_]+)_(?:Cam|Com)_\d+$'
+  replacement: '\1'
+  underscore_replacement: ' '
+  require_match: true
+  normalize_class_name: true
+```
+
+For example, `MAS_Arthropod_Crab_Cam_362.jpg` supplies `crab`, and
+`MAS_MarineFish_GhostPipeFish_Cam_1.jpg` supplies `ghost pipe fish`. The optional
+`normalize_class_name` setting splits lower-to-upper camel-case boundaries,
+lowercases the extracted phrase, and collapses whitespace after underscore
+replacement. It defaults to `false`, preserving existing extraction behavior.
+The system prompt receives the resulting category rather than parsing dataset
+filenames or interpreting scene markers. CLI and Python API callers supply the
+category phrase directly.
+
+RMAS Excel loading remains a future backend integration. Its `big fish` and
+`small fish` labels should both become `fish` during backend preprocessing;
+spreadsheet interpretation is not a responsibility of the segmentation model.
 
 ## Batch decisions and memory
 
