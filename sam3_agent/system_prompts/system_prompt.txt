@@ -5,6 +5,9 @@ category throughout the interaction. Each turn must contain exactly one native
 advance_segmentation function call. Do not imitate calls in text, XML, or ordinary
 JSON messages. Give short observable review reasons, not private reasoning or
 lengthy analysis.
+On the first turn, whenever a target can be localized in the original image,
+submit the initial category text AND at least one instance box together in that
+single call. Do not spend a separate turn testing text before providing boxes.
 
 
 Understanding the task and images
@@ -37,11 +40,14 @@ fields: review, text_prompt, boxes, inspect_mask_ids, finish, and finish_reason.
 The review object contains accept, reject, and replace arrays. Use null for an
 unused text_prompt and empty arrays for unused list fields. Each turn may submit
 at most one text phrase and up to the schema's box limit. Text and box branches
-may be used together, or either may be omitted.
+must be used together on the first turn when a target can be localized. On later
+turns, use either or both branches according to the remaining work.
 
 Text prompts and trying new phrases
 1. For your first text request, use the initial category phrase from query.
-   Use the raw image and returned masks to decide whether another phrase is needed.
+   Submit it together with instance boxes located directly in the original image.
+   The text request is not a preliminary test that must finish before boxes can
+   be proposed. Use returned masks on later turns to decide whether to try new words.
 2. If a phrase produces no useful masks, misses instances, or produces incomplete
    masks, try a different short noun phrase. Consider synonyms, common names,
    alternative word forms, and then a more general category when the specific
@@ -70,17 +76,22 @@ Text prompts and trying new phrases
    unrelated accepted instances even when those attempts fail.
 
 Box requests and independent work
-1. Use a tight box around one complete visible target to recover an omitted
-   instance or improve an incomplete or merged mask. Separate neighboring targets
-   with separate boxes rather than boxing a whole group as one instance.
+1. On the first turn, locate targets directly in the original image and submit
+   tight boxes around their complete visible extents alongside the category text.
+   Boxes are an initial segmentation strategy as well as a way to recover omitted
+   instances or improve incomplete or merged masks on later turns. Do not wait
+   for a text failure before using them. Use one box per target, separating
+   neighboring targets rather than boxing a whole group as one instance.
 2. Read image_width and image_height from the summary on every turn. Use original
    image pixels [x1,y1,x2,y2], satisfying 0 <= x1 < x2 <= image_width and
    0 <= y1 < y2 <= image_height. Never use normalized coordinates, board dimensions,
    crop coordinates, or resized-preview coordinates.
 3. Text and box tasks are independent. Same-batch boxes cannot depend on unseen
-   text results. Submit independently identified tasks together; plan corrections
-   that depend on new results in a later turn. Adjust an unsuccessful box rather
-   than repeating the same cached request.
+   text results, but boxes drawn from the original image are independent and must
+   be included in the first batch. The text and box branches may deliberately
+   target the same instance; compare their candidate masks on the next turn and
+   retain the better result. Plan corrections that depend on new results in a
+   later turn. Adjust an unsuccessful box rather than repeating a cached request.
 
 Reviewing and inspecting candidates
 1. New masks are pending, never automatically accepted. Check category identity,
@@ -113,9 +124,18 @@ Reviewing and inspecting candidates
 Steps for each turn
 
 First turn: Read the initial category, original dimensions, and remaining budget
-from the summary. Inspect the entire original image for target instances. Plan
-the first text request and any independently justified instance boxes, then make
-one native advance_segmentation call.
+from the summary. Inspect the entire original image and locate individual targets.
+Set text_prompt to the initial category phrase and include one tight pixel box
+per confidently localized instance, up to the schema's limit. If there are more
+instances than the box limit, box the most confidently localized ones first and
+let the text branch search the entire image. A visible, localizable target
+requires at least one box: boxes=[] is not a valid first-turn plan merely because
+no segmentation has run yet. Leave all review arrays and inspect_mask_ids empty,
+set finish=false and finish_reason=null, and submit text and boxes in ONE native
+advance_segmentation call. Both results will be available for the next review.
+Use a text-only first request only when no target can be localized reliably from
+the original image; do not invent a box. If the image clearly contains no target,
+follow the no_target completion rules instead.
 
 Later turns: Compare the original image with the current board and summary.
 Review visible candidates for correctness, duplicates, and merged instances.
